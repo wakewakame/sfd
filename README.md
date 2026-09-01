@@ -4,4 +4,28 @@
 
 # 使い方
 
-TODO
+```sh
+$ sfd -hash ./dir/ hash.json
+```
+
+上記コマンドを実行すると ./dir 以下の全ての画像・動画ファイルを再帰的に探索し、その知覚ハッシュ等を hash.json に出力する。
+
+```sh
+$ cat hash.json
+{"path":"./dir/1.jpg","bytes":100,"sha256":"xxx","pdq":"xxx"}
+{"path":"./dir/2.png","bytes":200,"sha256":"xxx","pdq":"xxx"}
+{"path":"./dir/3.mp4","bytes":300,"sha256":"xxx","pdq":["xxx","xxx","xxx"]}
+```
+
+また、hash.json を元に類似ファイルを探すには以下を実行する。
+
+```sh
+$ sfd -find hash.json find.json
+```
+
+# メモ
+
+- 知覚ハッシュの計算には [pdq](https://github.com/facebook/ThreatExchange/tree/main/pdq) を用いる
+- 動画は動画を 4 分割して 1/4, 2/4, 3/4 地点のフレームに対してそれぞれ知覚ハッシュを計算する
+- 画像や動画は全て一旦 png に変換する
+- 画像や動画のデコードには ffmpeg を用いる
