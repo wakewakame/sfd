@@ -29,3 +29,9 @@ $ sfd -find hash.json find.json
 - 動画は動画を 4 分割して 1/4, 2/4, 3/4 地点のフレームに対してそれぞれ知覚ハッシュを計算する
 - 画像や動画は全て一旦 png に変換する
 - 画像や動画のデコードには ffmpeg を用いる
+
+# ライセンス
+
+BSD 3-Clause License ([LICENSE](LICENSE))
+
+`pdq/` は [facebook/ThreatExchange](https://github.com/facebook/ThreatExchange/tree/main/pdq) の PDQ リファレンス実装 (Copyright (c) Meta Platforms, Inc. and affiliates、BSD 3-Clause) を Rust に移植したものです。上流の著作権表示と、どのファイルが何の派生物かは [pdq/LICENSE](pdq/LICENSE) にあります。本プロジェクトは Meta Platforms, Inc. とは無関係です。
