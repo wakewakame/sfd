@@ -58,21 +58,19 @@ pub fn run(options: HashOptions) -> Result<ExitCode, String> {
     }
     eprintln!("探索完了: {} 件", walked.files.len());
 
-    for (path, error) in &walked.unreadable {
-        eprintln!("sfd: {} を読めません: {error}", path.display());
-    }
-
     let done = existing.as_ref().map(|e| &e.done);
+    let found_count = walked.files.len();
     let todo: Vec<Found> = walked
         .files
         .into_iter()
         .filter(|found| done.is_none_or(|done| !done.contains(&found.relative)))
         .collect();
 
-    if let Some(done) = done {
-        eprintln!("うち {} 件は記録済みなので飛ばします", done.len());
+    let skipped = found_count - todo.len();
+    if skipped > 0 {
+        eprintln!("うち {skipped} 件は記録済みなので飛ばします");
     }
-    if todo.is_empty() {
+    if todo.is_empty() && walked.unreadable.is_empty() {
         eprintln!("処理するファイルはありません");
         return Ok(ExitCode::SUCCESS);
     }
@@ -83,20 +81,42 @@ pub fn run(options: HashOptions) -> Result<ExitCode, String> {
     }
     .map_err(|e| format!("{} を開けません: {e}", options.output.display()))?;
 
+    // 読めなかったものを先に書き出す。件数が少なく、ハッシュ計算より先に
+    // 目に入った方が気づきやすい。
+    for unreadable in &walked.unreadable {
+        eprintln!("sfd: {}: {}", unreadable.relative, unreadable.error);
+        let record = Record {
+            path: unreadable.relative.clone(),
+            bytes: None,
+            mtime: unreadable.mtime.map(record::rfc3339),
+            sha256: None,
+            width: None,
+            height: None,
+            duration: None,
+            pdq: None,
+            error: Some(unreadable.error.clone()),
+        };
+        writer
+            .write(&record)
+            .map_err(|e| format!("{} に書き出せません: {e}", options.output.display()))?;
+    }
+
     let tools = Tools { ffmpeg: options.ffmpeg.clone(), ffprobe: options.ffprobe.clone() };
     let summary = hash_all(&todo, &tools, options.jobs, &mut writer, interactive)?;
 
     writer.flush().map_err(|e| format!("{} に書き出せません: {e}", options.output.display()))?;
 
+    // 探索時に読めなかったものもエラーとして数える。数えないと、ディレクトリが
+    // まるごと欠けているのに終了コードが 0 になり、誰も気づけない。
+    let errors = summary.errors + walked.unreadable.len();
     eprintln!(
-        "完了: {} 件 (エラー {} 件、内容が同一で再利用 {} 件) {:.1} 秒",
-        summary.total,
-        summary.errors,
+        "完了: {} 件 (エラー {errors} 件、内容が同一で再利用 {} 件) {:.1} 秒",
+        summary.total + walked.unreadable.len(),
         summary.reused,
         summary.elapsed.as_secs_f64()
     );
 
-    Ok(if summary.errors > 0 { ExitCode::from(1) } else { ExitCode::SUCCESS })
+    Ok(if errors > 0 { ExitCode::from(1) } else { ExitCode::SUCCESS })
 }
 
 struct Summary {
@@ -221,8 +241,8 @@ fn tail(text: &str, width: usize) -> String {
 fn process(found: &Found, tools: &Tools, cache: &Mutex<HashMap<String, Computed>>) -> (Record, bool) {
     let mut record = Record {
         path: found.relative.clone(),
-        bytes: found.bytes,
-        mtime: record::rfc3339(found.mtime),
+        bytes: Some(found.bytes),
+        mtime: Some(record::rfc3339(found.mtime)),
         sha256: None,
         width: None,
         height: None,

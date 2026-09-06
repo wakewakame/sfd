@@ -1,6 +1,5 @@
 //! ディレクトリの再帰探索と、対象ファイルの判別。
 
-use std::io;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -47,11 +46,35 @@ pub struct Found {
     pub mtime: SystemTime,
 }
 
+/// 探索の途中で読めなかったもの。権限がないディレクトリなど。
+///
+/// これも hash.json に残す。黙って飛ばすと、そのディレクトリ以下のファイルが
+/// スキャン結果から丸ごと欠けているのに、後から誰もそれに気づけない。
+#[derive(Debug, Clone)]
+pub struct Unreadable {
+    /// 探索の起点からの相対パス。求められなければ元のパスをそのまま入れる。
+    pub relative: String,
+    /// 読めなかったものでも `lstat` は成功することが多いので、取れれば入れる。
+    pub mtime: Option<SystemTime>,
+    pub error: String,
+}
+
 /// 探索の結果。
 pub struct Walked {
     pub files: Vec<Found>,
-    /// 読めなかったディレクトリ。権限がないなど。
-    pub unreadable: Vec<(PathBuf, io::Error)>,
+    pub unreadable: Vec<Unreadable>,
+}
+
+impl Walked {
+    fn push_unreadable(&mut self, root: &Path, path: &Path, error: impl std::fmt::Display) {
+        self.unreadable.push(Unreadable {
+            relative: relative_path(root, path)
+                .filter(|relative| !relative.is_empty())
+                .unwrap_or_else(|| path.to_string_lossy().into_owned()),
+            mtime: std::fs::symlink_metadata(path).and_then(|m| m.modified()).ok(),
+            error: error.to_string(),
+        });
+    }
 }
 
 /// `root` 以下を再帰的に探索して、対象ファイルを集める。
@@ -71,7 +94,7 @@ pub fn walk(root: &Path, mut on_progress: impl FnMut(usize)) -> Walked {
         let entries = match std::fs::read_dir(&directory) {
             Ok(entries) => entries,
             Err(e) => {
-                walked.unreadable.push((directory, e));
+                walked.push_unreadable(root, &directory, format_args!("ディレクトリを読めません: {e}"));
                 continue;
             }
         };
@@ -79,14 +102,14 @@ pub fn walk(root: &Path, mut on_progress: impl FnMut(usize)) -> Walked {
         // 探索順が実行のたびに変わらないよう、ディレクトリ内は名前順に揃える。
         let mut children: Vec<PathBuf> = Vec::new();
         for entry in entries {
-            let entry = match entry {
-                Ok(entry) => entry,
-                Err(e) => {
-                    walked.unreadable.push((directory.clone(), e));
-                    continue;
-                }
-            };
-            children.push(entry.path());
+            match entry {
+                Ok(entry) => children.push(entry.path()),
+                Err(e) => walked.push_unreadable(
+                    root,
+                    &directory,
+                    format_args!("ディレクトリの中身を読めません: {e}"),
+                ),
+            }
         }
         children.sort();
 
@@ -95,7 +118,7 @@ pub fn walk(root: &Path, mut on_progress: impl FnMut(usize)) -> Walked {
             let metadata = match std::fs::symlink_metadata(&path) {
                 Ok(metadata) => metadata,
                 Err(e) => {
-                    walked.unreadable.push((path, e));
+                    walked.push_unreadable(root, &path, format_args!("情報を取得できません: {e}"));
                     continue;
                 }
             };
@@ -111,7 +134,10 @@ pub fn walk(root: &Path, mut on_progress: impl FnMut(usize)) -> Walked {
             let Some(kind) = classify(&path) else {
                 continue;
             };
+            // パスを UTF-8 の相対パスにできないと hash.json に書けない。
+            // 黙って飛ばすと結果から欠けたことに気づけないので、これも記録する。
             let Some(relative) = relative_path(root, &path) else {
+                walked.push_unreadable(root, &path, "パスを UTF-8 として扱えません");
                 continue;
             };
 

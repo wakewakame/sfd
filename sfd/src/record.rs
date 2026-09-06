@@ -29,12 +29,20 @@ pub struct Header {
 ///
 /// `width` などが `None` の場合はフィールドごと出力しない。エラーで終わった
 /// ファイルは [`Record::error`] を持ち、知覚ハッシュを持たない。
+///
+/// 権限がなくて読めなかったディレクトリもここに記録する。その場合は `path` と
+/// `error` しか持たないこともある。黙って飛ばすと、そのディレクトリ以下の
+/// ファイルが結果から丸ごと欠けているのに誰も気づけない。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Record {
     /// [`Header::root`] からの相対パス。
     pub path: String,
-    pub bytes: u64,
-    pub mtime: String,
+    /// 読めなかったものでは欠けることがある。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<u64>,
+    /// 読めなかったものでは欠けることがある。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mtime: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sha256: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -72,7 +80,11 @@ pub struct Frame {
 #[derive(Debug)]
 pub struct Existing {
     pub header: Header,
-    /// 既に記録済みのパス。再開時にこれを読み飛ばす。
+    /// 成功として記録済みのパス。再開時にこれを読み飛ばす。
+    ///
+    /// `error` を持つ行はここに入れない。権限を直したり壊れたファイルを
+    /// 差し替えたりしたら、次の実行で自動的に埋まってほしいため。エラーは
+    /// 失敗するときも速いので、毎回試し直しても実質コストはかからない。
     pub done: HashSet<String>,
     /// 末尾行が途中で切れていたので切り捨てた。
     pub truncated_tail: bool,
@@ -138,7 +150,13 @@ pub fn read_existing(path: &Path) -> Result<Option<Existing>, ReadError> {
         } else {
             match serde_json::from_slice::<Record>(content) {
                 Ok(record) => {
-                    done.insert(record.path);
+                    // 同じパスが複数回現れたら後の行が有効。エラー行を再試行する
+                    // 都合で、追記のたびに同じパスが増えうるため。
+                    if record.error.is_some() {
+                        done.remove(&record.path);
+                    } else {
+                        done.insert(record.path);
+                    }
                 }
                 Err(_) if !complete => {
                     truncated_tail = true;
@@ -283,8 +301,8 @@ mod tests {
     fn sample(duration: Option<f64>, frames: Vec<Frame>) -> Record {
         Record {
             path: "a/b".into(),
-            bytes: 100,
-            mtime: "2026-09-02T01:23:45Z".into(),
+            bytes: Some(100),
+            mtime: Some("2026-09-02T01:23:45Z".into()),
             sha256: Some("ab".repeat(32)),
             width: Some(1920),
             height: Some(1080),
@@ -360,6 +378,32 @@ mod tests {
         assert_eq!(existing.done.len(), 2);
         assert!(existing.done.contains("a.jpg") && existing.done.contains("b.jpg"));
         assert!(!existing.truncated_tail);
+    }
+
+    /// `error` を持つ行は「済み」に数えない。権限を直したり壊れたファイルを
+    /// 差し替えたりしたら、次の実行で自動的に埋まってほしいため。
+    #[test]
+    fn failed_paths_are_retried() {
+        let failed = r#"{"path":"locked","error":"読めません"}"#;
+        let file = TempFile::with(format!("{HEADER}\n{ROW_A}\n{failed}\n").as_bytes());
+
+        let existing = read_existing(&file.0).unwrap().unwrap();
+        assert_eq!(existing.done, ["a.jpg".to_string()].into_iter().collect());
+    }
+
+    /// 同じパスが複数回現れたら後の行が有効。エラー行を再試行する都合で、
+    /// 追記のたびに同じパスが増えうる。
+    #[test]
+    fn later_lines_win_for_the_same_path() {
+        let failed = r#"{"path":"a.jpg","error":"読めません"}"#;
+
+        // 失敗のあとに成功 -> 済み扱い。
+        let file = TempFile::with(format!("{HEADER}\n{failed}\n{ROW_A}\n").as_bytes());
+        assert!(read_existing(&file.0).unwrap().unwrap().done.contains("a.jpg"));
+
+        // 成功のあとに失敗 -> 未処理扱いに戻る。
+        let file = TempFile::with(format!("{HEADER}\n{ROW_A}\n{failed}\n").as_bytes());
+        assert!(read_existing(&file.0).unwrap().unwrap().done.is_empty());
     }
 
     /// ヘッダだけの状態から再開できる (1 件も処理せずに中断した場合)。
