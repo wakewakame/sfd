@@ -1,10 +1,12 @@
 [workspace]
 members = ["pdq", "sfd"]
-resolver = "2"
+# edition 2024 に対応する resolver。仮想ワークスペースはメンバーの edition から
+# 継承しないので、明示しないと resolver 1 に落ちる。
+resolver = "3"
 
 [workspace.package]
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 license = "BSD-3-Clause"
 
 # profile はワークスペースルートのものだけが使われるので、ここに置く。
