@@ -16,12 +16,17 @@ pub struct Tools {
 }
 
 impl Tools {
-    /// 動画の尺 (秒) を得る。
+    /// 動画の尺 (秒) を得る。映像ストリームが無ければ `Ok(None)`。
     ///
     /// これがないと 1/4, 2/4, 3/4 地点を計算できない。ffmpeg 自身も stderr に
     /// `Duration:` を出しているが、あれは人間向けの表示で形式の保証がないので、
     /// 機械向けのインターフェースを持つ ffprobe を使う。
-    pub fn probe_duration(&self, path: &Path) -> Result<f64, String> {
+    ///
+    /// 映像の有無を尺とは別に確かめているのは、`format` の尺がコンテナ全体の
+    /// ものだから。音声しか入っていない .webm でも尺は返ってくるので、それだけを
+    /// 見ていると 1/4 地点を取りに行って
+    /// 「Output file does not contain any stream」で落ちる。
+    pub fn probe_duration(&self, path: &Path) -> Result<Option<f64>, String> {
         let output = Command::new(&self.ffprobe)
             .args(["-v", "error", "-select_streams", "v:0"])
             .args(["-show_entries", "format=duration:stream=duration", "-of", "json"])
@@ -36,18 +41,20 @@ impl Tools {
         let parsed: serde_json::Value = serde_json::from_slice(&output.stdout)
             .map_err(|e| format!("cannot parse the ffprobe output: {e}"))?;
 
-        // コンテナ全体の尺を優先し、無ければ映像ストリームの尺を使う。
-        let duration = parsed
-            .get("format")
-            .and_then(|format| format.get("duration"))
-            .or_else(|| {
-                parsed.get("streams").and_then(|streams| streams.get(0)).and_then(|s| s.get("duration"))
-            })
+        // -select_streams v:0 を付けてあるので、映像が無ければ streams は空になる。
+        let Some(video) = parsed.get("streams").and_then(|streams| streams.get(0)) else {
+            return Ok(None);
+        };
+
+        // 映像ストリーム自身の尺を優先し、無ければコンテナ全体の尺を使う。
+        let duration = video
+            .get("duration")
+            .or_else(|| parsed.get("format").and_then(|format| format.get("duration")))
             .and_then(|value| value.as_str())
             .and_then(|text| text.parse::<f64>().ok());
 
         match duration {
-            Some(seconds) if seconds.is_finite() && seconds > 0.0 => Ok(seconds),
+            Some(seconds) if seconds.is_finite() && seconds > 0.0 => Ok(Some(seconds)),
             _ => Err("cannot determine the duration".to_string()),
         }
     }
@@ -81,14 +88,23 @@ impl Tools {
             command.arg("-ss").arg(format!("{at:.6}"));
         }
 
-        // ストリームも画素形式も明示しないのは意図的。iPhone の HEIC は画像がタイルに
-        // 分割されて数百のストリームとして見えるため、-map 0:v:0 を付けると先頭の
-        // タイルだけを掴んでしまう。またそのグリッド再構成は内部で complex filtergraph
-        // を使うため、-vf を併用すると失敗する。
+        // ストリームを明示しないのは意図的。iPhone の HEIC は画像がタイルに分割されて
+        // 数百のストリームとして見えるため、-map 0:v:0 を付けると先頭のタイルだけを
+        // 掴んでしまう。またそのグリッド再構成は内部で complex filtergraph を使うため、
+        // -vf を併用すると "Simple and complex filtering cannot be used together" で失敗する。
+        //
+        // 画素形式は rgb24 に固定する。自動交渉に任せると、1 ビットの白黒 PNG では
+        // pam エンコーダが monob を選び、MAXVAL 1 のビット詰めされた PAM が出てくる。
+        // 他にも gray16be や rgba64be を選ぶ余地があり、そのたびに読めない形式が
+        // 増える。-pix_fmt は複合フィルタとは別の経路なので HEIC とも併用できる。
+        //
+        // 代償として、グレースケール画像も RGB 経由になり輝度係数の丸めが挟まる。
+        // リファレンス実装の専用経路とは数ビットずれるが、読めない形式が出るより良い。
         command
             .arg("-i")
             .arg(path)
-            .args(["-frames:v", "1", "-f", "image2pipe", "-c:v", "pam", "-"]);
+            .args(["-frames:v", "1", "-pix_fmt", "rgb24"])
+            .args(["-f", "image2pipe", "-c:v", "pam", "-"]);
 
         let output = command
             .output()

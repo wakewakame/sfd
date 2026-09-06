@@ -152,16 +152,14 @@ fn decode_with_ffmpeg(path: &Path, opts: &Options) -> Result<Image, String> {
     //   併用すると "Simple and complex filtering cannot be used together" で失敗する。
     //   画素形式は pam エンコーダとの自動交渉に任せれば、グレースケールは
     //   グレースケールのまま (DEPTH 1)、カラーは RGB (DEPTH 3) で出てくる。
+    // 画素形式は rgb24 に固定する。自動交渉に任せると、1 ビットの白黒 PNG では
+    // pam エンコーダが monob を選び、MAXVAL 1 のビット詰めされた PAM が出てくる。
+    // -pix_fmt は複合フィルタとは別の経路なので HEIC とも併用できる。
     command
         .arg("-i")
         .arg(path)
-        .arg("-frames:v")
-        .arg("1")
-        .arg("-f")
-        .arg("image2pipe")
-        .arg("-c:v")
-        .arg("pam")
-        .arg("-");
+        .args(["-frames:v", "1", "-pix_fmt", "rgb24"])
+        .args(["-f", "image2pipe", "-c:v", "pam", "-"]);
 
     let output = command
         .output()

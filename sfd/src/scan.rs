@@ -101,13 +101,15 @@ pub fn run(options: HashOptions) -> Result<ExitCode, String> {
     // 探索時に読めなかったものもエラーとして数える。数えないと、ディレクトリが
     // まるごと欠けているのに終了コードが 0 になり、誰も気づけない。
     let errors = summary.errors + walked.unreadable.len();
-    eprintln!(
-        "Done: {}, {}, {} reused as identical, in {:.1}s",
+    let mut notes = vec![
         progress::plural(summary.total + walked.unreadable.len(), "file"),
         progress::plural(errors, "error"),
-        summary.reused,
-        summary.elapsed.as_secs_f64()
-    );
+        format!("{} reused as identical", summary.reused),
+    ];
+    if summary.nothing_to_hash > 0 {
+        notes.push(format!("{} with nothing to hash", summary.nothing_to_hash));
+    }
+    eprintln!("Done: {}, in {:.1}s", notes.join(", "), summary.elapsed.as_secs_f64());
 
     Ok(if errors > 0 { ExitCode::from(1) } else { ExitCode::SUCCESS })
 }
@@ -116,6 +118,8 @@ struct Summary {
     total: usize,
     errors: usize,
     reused: usize,
+    /// ハッシュするものが無かった件数 (音声だけの動画など)。失敗ではない。
+    nothing_to_hash: usize,
     elapsed: Duration,
 }
 
@@ -144,7 +148,8 @@ fn hash_all(
     let cache: Mutex<HashMap<String, Computed>> = Mutex::new(HashMap::new());
     let (sender, receiver) = mpsc::channel::<(Record, bool)>();
 
-    let mut summary = Summary { total: 0, errors: 0, reused: 0, elapsed: Duration::ZERO };
+    let mut summary =
+        Summary { total: 0, errors: 0, reused: 0, nothing_to_hash: 0, elapsed: Duration::ZERO };
     let mut write_error = None;
 
     std::thread::scope(|scope| {
@@ -172,6 +177,9 @@ fn hash_all(
             }
             if reused {
                 summary.reused += 1;
+            }
+            if record.pdq.is_none() && record.error.is_none() {
+                summary.nothing_to_hash += 1;
             }
 
             // 途中で落ちても再開できるよう、1 件ごとに書き出す。
@@ -261,7 +269,12 @@ fn compute(found: &Found, tools: &Tools, dihedral: bool) -> Computed {
         },
         Kind::Video => {
             let duration = match tools.probe_duration(&found.path) {
-                Ok(duration) => duration,
+                Ok(Some(duration)) => duration,
+                // 映像が無い (音声だけの .webm など)。ハッシュするものが無いだけで
+                // 失敗ではないので、pdq も error も持たない記録として残す。
+                // error を持たないので再開時に読み飛ばされ、find も pdq が無い行を
+                // 元々無視する。
+                Ok(None) => return computed,
                 Err(e) => {
                     computed.error = Some(e);
                     return computed;
