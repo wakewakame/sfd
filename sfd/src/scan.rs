@@ -6,7 +6,7 @@ use std::path::Path;
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use sha2::{Digest, Sha256};
 
@@ -141,7 +141,9 @@ fn hash_all(
     dihedral: bool,
     reporter: &mut Reporter,
 ) -> Result<Summary, String> {
-    let started = Instant::now();
+    // 探索にかかった時間を残り時間の見積もりに混ぜないよう、ここで時計を合わせる。
+    // 要約に出す所要時間も同じ時計から取るので、二重に持たない。
+    reporter.restart();
     let next = AtomicUsize::new(0);
     // 内容が同一のファイルは知覚ハッシュを計算し直さない。復号は 1 枚 470ms
     // かかるのに対し sha256 は 34MB で 17ms なので、完全重複が多いほど効く。
@@ -198,7 +200,7 @@ fn hash_all(
         return Err(e);
     }
 
-    summary.elapsed = started.elapsed();
+    summary.elapsed = reporter.elapsed();
     Ok(summary)
 }
 

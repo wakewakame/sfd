@@ -37,6 +37,15 @@ impl Reporter {
         self.started.elapsed()
     }
 
+    /// 残り時間の基準になる時計を、いま始まる作業の開始時刻に合わせる。
+    ///
+    /// 残り時間は「総経過時間 ÷ 処理済み件数」で見積もっているので、前の工程に
+    /// かかった時間が混ざると 1 件あたりが過大になる。探索に 60 秒かかった直後の
+    /// 1 件目で「1 件 60 秒」と見積もられ、序盤の表示が桁違いになってしまう。
+    pub fn restart(&mut self) {
+        self.started = Instant::now();
+    }
+
     /// 総数がまだ分からない段階の表示。
     pub fn counting(&mut self, label: &str, count: usize) {
         if self.due() {
