@@ -15,6 +15,7 @@ use std::process::ExitCode;
 
 use serde::Serialize;
 
+use crate::progress::Reporter;
 use crate::record::{self, Record, DIHEDRAL_NAMES};
 use crate::FindOptions;
 
@@ -41,13 +42,19 @@ pub fn run(options: FindOptions) -> Result<ExitCode, String> {
             .then(a.path.cmp(&b.path))
     });
 
-    let groups = group(&entries, options.threshold);
+    let mut reporter = Reporter::new();
+    let groups = group(&entries, options.threshold, &mut reporter);
+    reporter.finish();
     let grouped: usize = groups.iter().map(|g| 1 + g.similar.len()).sum();
 
     write_output(&options.output, options.threshold, &groups)
         .map_err(|e| format!("{} に書き出せません: {e}", options.output.display()))?;
 
-    eprintln!("似ているファイル: {grouped} 件が {} グループ", groups.len());
+    eprintln!(
+        "似ているファイル: {grouped} 件が {} グループ {:.1} 秒",
+        groups.len(),
+        reporter.elapsed().as_secs_f64()
+    );
     Ok(ExitCode::SUCCESS)
 }
 
@@ -199,41 +206,52 @@ struct Match {
 ///
 /// 動画は 3 箇所すべてが、対応する位置どうしで一致することを要求する。1 箇所でも
 /// 一致すれば可とすると、黒画面や白画面がありふれているぶん偽陽性が増える。
+///
+/// 回転・反転は **1 つの変換で全フレームが揃うこと**を要求する。フレームごとに
+/// 別々の変換を許すと、実際には起こりえない組み合わせ (1 枚目は 90 度回転、
+/// 2 枚目は左右反転) で一致してしまい、各フレームが 8 回ずつ独立に試行するぶん
+/// 偽陽性が増える。
 fn compare(a: &Entry, b: &Entry, threshold: u32) -> Option<Match> {
     if a.is_video != b.is_video || a.frames.len() != b.frames.len() {
         return None;
     }
 
-    let mut worst = 0;
-    let mut transform = None;
-    for (index, (frame_a, frame_b)) in a.frames.iter().zip(&b.frames).enumerate() {
+    let variants = a.frames.iter().map(|frame| frame.variants.len()).min()?;
+    let mut best: Option<Match> = None;
+
+    for at in 0..variants {
         // 自分の変種を相手の元の向きにぶつける。両方の変種を総当たりする必要はない。
-        let (best, at) = frame_a
-            .variants
-            .iter()
-            .enumerate()
-            .map(|(at, variant)| (distance(variant, &frame_b.original), at))
-            .min()?;
-        if best > threshold {
-            return None;
+        let mut worst = 0;
+        let matched = a.frames.iter().zip(&b.frames).all(|(frame_a, frame_b)| {
+            let d = distance(&frame_a.variants[at], &frame_b.original);
+            worst = worst.max(d);
+            d <= threshold
+        });
+        if !matched {
+            continue;
         }
-        worst = worst.max(best);
-        // どの変換で一致したかは 1 フレーム目のものを代表として記録する。
-        if index == 0 && at > 0 {
-            transform = Some(DIHEDRAL_NAMES[at - 1]);
+        // 同じ距離なら元の向きを優先する (at = 0 から見ているので自然にそうなる)。
+        if best.as_ref().is_none_or(|found| worst < found.distance) {
+            let transform = (at > 0).then(|| DIHEDRAL_NAMES[at - 1]);
+            best = Some(Match { distance: worst, transform });
         }
     }
 
-    Some(Match { distance: worst, transform })
+    best
 }
 
 /// 貪欲法でグループを作る。先頭から順に、まだどのグループにも入っていない
 /// ファイルのうち、しきい値以内のものを集める。
-fn group(entries: &[Entry], threshold: u32) -> Vec<Group<'_>> {
+fn group<'a>(
+    entries: &'a [Entry],
+    threshold: u32,
+    reporter: &mut Reporter,
+) -> Vec<Group<'a>> {
     let mut taken = vec![false; entries.len()];
     let mut groups = Vec::new();
 
     for head in 0..entries.len() {
+        reporter.update(head, entries.len(), &entries[head].path);
         if taken[head] {
             continue;
         }
@@ -358,6 +376,39 @@ mod tests {
         assert_eq!(compare(&a, &c, 31).unwrap().transform, None);
     }
 
+    /// 回転・反転は 1 つの変換で全フレームが揃うことを要求する。フレームごとに
+    /// 別々の変換で一致するのは実際には起こりえないので、弾く。
+    #[test]
+    fn one_transform_must_explain_every_frame() {
+        let (x, y) = (bits(100), bits(200));
+
+        // a の 1 枚目は変種 1 が x に、2 枚目は変種 2 が y に一致する。
+        let mut a = entry("a.mp4", true, vec![bits(0), bits(0)]);
+        a.frames[0].variants = vec![bits(0), x, bits(50)];
+        a.frames[1].variants = vec![bits(0), bits(50), y];
+        let b = entry("b.mp4", true, vec![x, y]);
+        assert!(
+            compare(&a, &b, 31).is_none(),
+            "フレームごとに違う変換を使う組み合わせを通してはいけない"
+        );
+
+        // 同じ変種 1 で両フレームが揃うなら一致とする。
+        let mut c = entry("c.mp4", true, vec![bits(0), bits(0)]);
+        c.frames[0].variants = vec![bits(0), x];
+        c.frames[1].variants = vec![bits(0), y];
+        let matched = compare(&c, &b, 31).unwrap();
+        assert_eq!(matched.transform, Some("rotate90"));
+    }
+
+    /// 元の向きでも変種でも一致する場合は、元の向きを優先する。
+    #[test]
+    fn the_original_orientation_wins_ties() {
+        let mut a = entry("a.jpg", false, vec![bits(0)]);
+        a.frames[0].variants.push(bits(0)); // 変種も同じ距離で一致する
+        let b = entry("b.jpg", false, vec![bits(0)]);
+        assert_eq!(compare(&a, &b, 31).unwrap().transform, None);
+    }
+
     /// 連鎖するデータを 1 つのグループにまとめない。隣どうしは近いが両端が
     /// 遠い並びで、推移閉包を取ると距離の離れた 2 つが同居してしまう。
     #[test]
@@ -367,7 +418,7 @@ mod tests {
             .map(|i| entry(&format!("{i}.jpg"), false, vec![bits(i * 20)]))
             .collect();
 
-        let groups = group(&entries, 31);
+        let groups = group(&entries, 31, &mut Reporter::new());
         assert_eq!(groups.len(), 2, "{groups:?} は 2 グループになるはず", groups = groups.len());
         assert_eq!(groups[0].path, "0.jpg");
         assert_eq!(groups[0].similar.len(), 1); // 20 ビット差のものだけ
@@ -382,7 +433,7 @@ mod tests {
             entry("b.jpg", false, vec![bits(100)]),
             entry("c.jpg", false, vec![bits(200)]),
         ];
-        assert!(group(&entries, 31).is_empty());
+        assert!(group(&entries, 31, &mut Reporter::new()).is_empty());
     }
 
     /// 一度どこかのグループに入ったファイルは、以降のグループに現れない。
@@ -392,7 +443,7 @@ mod tests {
             .map(|i| entry(&format!("{i}.jpg"), false, vec![bits(i * 4)]))
             .collect();
 
-        let groups = group(&entries, 31);
+        let groups = group(&entries, 31, &mut Reporter::new());
         let mut seen = std::collections::HashSet::new();
         for group in &groups {
             assert!(seen.insert(group.path));

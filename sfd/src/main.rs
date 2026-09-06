@@ -2,6 +2,7 @@
 
 mod find;
 mod media;
+mod progress;
 mod record;
 mod scan;
 mod walk;

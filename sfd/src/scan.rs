@@ -1,7 +1,7 @@
 //! `sfd hash` の本体。探索・ハッシュ計算・書き出しをまとめる。
 
 use std::collections::HashMap;
-use std::io::{IsTerminal, Read, Write};
+use std::io::Read;
 use std::path::Path;
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use sha2::{Digest, Sha256};
 
 use crate::media::{self, Tools};
+use crate::progress::Reporter;
 use crate::record::{self, Frame, Record};
 use crate::walk::{self, Found, Kind};
 use crate::HashOptions;
@@ -43,19 +44,10 @@ pub fn run(options: HashOptions) -> Result<ExitCode, String> {
         }
     }
 
-    // 端末でなければ行を上書きする進捗を出さない。リダイレクト先に \r が
-    // 混ざるとログとして読めなくなるため。
-    let interactive = std::io::stderr().is_terminal();
-
     // 探索。件数が確定してからでないと進捗を割合で出せない。
-    let walked = walk::walk(&options.root, |count| {
-        if interactive && count % 1000 == 0 {
-            eprint!("\r探索中... {count} 件");
-        }
-    });
-    if interactive {
-        clear_line();
-    }
+    let mut reporter = Reporter::new();
+    let walked = walk::walk(&options.root, |count| reporter.counting("探索中...", count));
+    reporter.finish();
     eprintln!("探索完了: {} 件", walked.files.len());
 
     let done = existing.as_ref().map(|e| &e.done);
@@ -102,7 +94,7 @@ pub fn run(options: HashOptions) -> Result<ExitCode, String> {
     }
 
     let tools = Tools { ffmpeg: options.ffmpeg.clone(), ffprobe: options.ffprobe.clone() };
-    let summary = hash_all(&todo, &tools, options.jobs, &mut writer, options.dihedral, interactive)?;
+    let summary = hash_all(&todo, &tools, options.jobs, &mut writer, options.dihedral, &mut reporter)?;
 
     writer.flush().map_err(|e| format!("{} に書き出せません: {e}", options.output.display()))?;
 
@@ -142,7 +134,7 @@ fn hash_all(
     jobs: usize,
     writer: &mut record::Writer,
     dihedral: bool,
-    interactive: bool,
+    reporter: &mut Reporter,
 ) -> Result<Summary, String> {
     let started = Instant::now();
     let next = AtomicUsize::new(0);
@@ -172,7 +164,6 @@ fn hash_all(
         // 全ワーカーが終わったときに受信ループが抜けられるよう、元の送信端は捨てる。
         drop(sender);
 
-        let mut last_progress = Instant::now();
         for (record, reused) in receiver {
             summary.total += 1;
             if record.error.is_some() {
@@ -188,16 +179,11 @@ fn hash_all(
                 break;
             }
 
-            if interactive && last_progress.elapsed() >= Duration::from_millis(200) {
-                progress(summary.total, todo.len(), started.elapsed(), &record.path);
-                last_progress = Instant::now();
-            }
+            reporter.update(summary.total, todo.len(), &record.path);
         }
     });
 
-    if interactive {
-        clear_line();
-    }
+    reporter.finish();
 
     if let Some(e) = write_error {
         return Err(e);
@@ -205,37 +191,6 @@ fn hash_all(
 
     summary.elapsed = started.elapsed();
     Ok(summary)
-}
-
-/// 進捗表示に使う桁数。行を消すときもこの幅で揃える。
-const PROGRESS_WIDTH: usize = 78;
-
-/// 書きかけの進捗行を消して行頭に戻る。
-fn clear_line() {
-    eprint!("\r{}\r", " ".repeat(PROGRESS_WIDTH));
-}
-
-fn progress(done: usize, total: usize, elapsed: Duration, current: &str) {
-    let percent = if total == 0 { 100.0 } else { done as f64 * 100.0 / total as f64 };
-    // 残り時間は「これまでの平均が続く」という前提の粗い見積もり。
-    let remaining = if done == 0 {
-        String::from("--")
-    } else {
-        let per_file = elapsed.as_secs_f64() / done as f64;
-        format!("{:.0}s", per_file * (total - done) as f64)
-    };
-    let name = tail(current, 34);
-    eprint!("\r{done}/{total} ({percent:.1}%) 残り約 {remaining}  {name:<34}");
-    let _ = std::io::stderr().flush();
-}
-
-/// 進捗表示に収まるよう、長いパスは先頭を省く。
-fn tail(text: &str, width: usize) -> String {
-    let chars: Vec<char> = text.chars().collect();
-    if chars.len() <= width {
-        return text.to_string();
-    }
-    format!("...{}", chars[chars.len() - (width - 3)..].iter().collect::<String>())
 }
 
 /// 1 ファイルを処理する。返り値の `bool` は計算結果を使い回したか。
@@ -380,17 +335,6 @@ fn sha256_file(path: &Path) -> std::io::Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// 省略後もちょうど `width` 文字に収まる (進捗表示の桁が揺れない)。
-    #[test]
-    fn shortens_long_paths_from_the_front() {
-        assert_eq!(tail("abc", 10), "abc");
-        assert_eq!(tail("abcdefghij", 10), "abcdefghij");
-        assert_eq!(tail("abcdefghijk", 10), "...efghijk");
-        assert_eq!(tail("abcdefghijk", 10).chars().count(), 10);
-        // マルチバイトでもバイト境界で切らない。
-        assert_eq!(tail("あいうえおかきくけこ", 5), "...けこ");
-    }
 
     #[test]
     fn hashes_a_known_file() {
