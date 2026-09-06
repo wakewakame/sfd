@@ -102,7 +102,7 @@ pub fn run(options: HashOptions) -> Result<ExitCode, String> {
     }
 
     let tools = Tools { ffmpeg: options.ffmpeg.clone(), ffprobe: options.ffprobe.clone() };
-    let summary = hash_all(&todo, &tools, options.jobs, &mut writer, interactive)?;
+    let summary = hash_all(&todo, &tools, options.jobs, &mut writer, options.dihedral, interactive)?;
 
     writer.flush().map_err(|e| format!("{} に書き出せません: {e}", options.output.display()))?;
 
@@ -141,6 +141,7 @@ fn hash_all(
     tools: &Tools,
     jobs: usize,
     writer: &mut record::Writer,
+    dihedral: bool,
     interactive: bool,
 ) -> Result<Summary, String> {
     let started = Instant::now();
@@ -161,7 +162,7 @@ fn hash_all(
                 loop {
                     let index = next.fetch_add(1, Ordering::Relaxed);
                     let Some(found) = todo.get(index) else { break };
-                    let outcome = process(found, tools, cache);
+                    let outcome = process(found, tools, dihedral, cache);
                     if sender.send(outcome).is_err() {
                         break; // 受け手が落ちた
                     }
@@ -238,7 +239,12 @@ fn tail(text: &str, width: usize) -> String {
 }
 
 /// 1 ファイルを処理する。返り値の `bool` は計算結果を使い回したか。
-fn process(found: &Found, tools: &Tools, cache: &Mutex<HashMap<String, Computed>>) -> (Record, bool) {
+fn process(
+    found: &Found,
+    tools: &Tools,
+    dihedral: bool,
+    cache: &Mutex<HashMap<String, Computed>>,
+) -> (Record, bool) {
     let mut record = Record {
         path: found.relative.clone(),
         bytes: Some(found.bytes),
@@ -264,7 +270,7 @@ fn process(found: &Found, tools: &Tools, cache: &Mutex<HashMap<String, Computed>
     let (computed, reused) = match cached {
         Some(computed) => (computed, true),
         None => {
-            let computed = compute(found, tools);
+            let computed = compute(found, tools, dihedral);
             if let Ok(mut cache) = cache.lock() {
                 cache.insert(sha256, computed.clone());
             }
@@ -280,7 +286,7 @@ fn process(found: &Found, tools: &Tools, cache: &Mutex<HashMap<String, Computed>
     (record, reused)
 }
 
-fn compute(found: &Found, tools: &Tools) -> Computed {
+fn compute(found: &Found, tools: &Tools, dihedral: bool) -> Computed {
     let mut computed =
         Computed { width: None, height: None, duration: None, pdq: None, error: None };
 
@@ -290,7 +296,7 @@ fn compute(found: &Found, tools: &Tools) -> Computed {
                 computed.width = Some(image.width as u32);
                 computed.height = Some(image.height as u32);
                 // 画像も「1 フレームの動画」として同じ形で持つ。
-                match hash_frame(image, 0.0) {
+                match hash_frame(image, 0.0, dihedral) {
                     Ok(frame) => computed.pdq = Some(vec![frame]),
                     Err(e) => computed.error = Some(e),
                 }
@@ -313,7 +319,7 @@ fn compute(found: &Found, tools: &Tools) -> Computed {
                     Ok(image) => {
                         computed.width.get_or_insert(image.width as u32);
                         computed.height.get_or_insert(image.height as u32);
-                        match hash_frame(image, at) {
+                        match hash_frame(image, at, dihedral) {
                             Ok(frame) => frames.push(frame),
                             Err(e) => {
                                 computed.error = Some(e);
@@ -334,12 +340,27 @@ fn compute(found: &Found, tools: &Tools) -> Computed {
     computed
 }
 
-fn hash_frame(mut image: pdq::Image, at: f64) -> Result<Frame, String> {
+fn hash_frame(mut image: pdq::Image, at: f64, dihedral: bool) -> Result<Frame, String> {
     // リファレンス CLI と同じ 512x512 の前処理。公式の期待値と揃ううえ、
     // Jarosz フィルタの計算量が入力画素数に比例するため桁違いに速い。
     pdq::preprocess::reference_downsample(&mut image);
-    let (hash, quality) = pdq::hash_image(&image).map_err(|e| e.to_string())?;
-    Ok(Frame { t: at, hash: hash.to_hex(), quality })
+
+    if !dihedral {
+        let (hash, quality) = pdq::hash_image(&image).map_err(|e| e.to_string())?;
+        return Ok(Frame { t: at, hash: hash.to_hex(), dihedral: None, quality });
+    }
+
+    // 回転・反転版は画像を変換し直すのではなく DCT 係数から導くので、
+    // 追加コストはほぼゼロ。ただし計算時にしか作れないため、後から
+    // 欲しくなると全ファイルの再スキャンになる。
+    let (hashes, quality) = pdq::dihedral_image(&image).map_err(|e| e.to_string())?;
+    let all = hashes.all();
+    Ok(Frame {
+        t: at,
+        hash: all[0].1.to_hex(),
+        dihedral: Some(all[1..].iter().map(|(_, hash)| hash.to_hex()).collect()),
+        quality,
+    })
 }
 
 fn sha256_file(path: &Path) -> std::io::Result<String> {

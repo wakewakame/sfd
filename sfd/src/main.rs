@@ -1,5 +1,6 @@
 //! 膨大にある画像・動画ファイルの中から類似のファイルを検出するツール。
 
+mod find;
 mod media;
 mod record;
 mod scan;
@@ -18,8 +19,15 @@ const USAGE: &str = "\
 sfd hash のオプション:
   -j, --jobs N       並列数 (既定: CPU 数)
       --no-resume    既存の hash.json を無視して最初からやり直す
+      --no-dihedral  回転・反転版のハッシュを記録しない。hash.json は小さくなるが、
+                     回転したコピーを検出できなくなる。これは計算時にしか作れない
+                     ので、後から欲しくなると全ファイルの再スキャンになる
       --ffmpeg PATH  ffmpeg の実行ファイル (環境変数 SFD_FFMPEG でも可)
       --ffprobe PATH ffprobe の実行ファイル (環境変数 SFD_FFPROBE でも可)
+
+sfd find のオプション:
+  -t, --threshold N    一致とみなすハミング距離の上限 (0..=256、既定: 31)
+      --min-quality N  品質指標がこの値未満のファイルを比較から外す (既定: 0)
 
 共通のオプション:
   -h, --help         この使い方を表示する
@@ -55,7 +63,7 @@ fn run() -> Result<ExitCode, String> {
 
     match subcommand.as_str() {
         "hash" => scan::run(parse_hash_args(args)?),
-        "find" => Err("sfd find は未実装です".to_string()),
+        "find" => find::run(parse_find_args(args)?),
         other => Err(format!("不明なサブコマンドです: {other}")),
     }
 }
@@ -66,6 +74,7 @@ pub struct HashOptions {
     pub output: PathBuf,
     pub jobs: usize,
     pub resume: bool,
+    pub dihedral: bool,
     pub ffmpeg: String,
     pub ffprobe: String,
 }
@@ -74,6 +83,7 @@ fn parse_hash_args(mut args: impl Iterator<Item = String>) -> Result<HashOptions
     let mut positional = Vec::new();
     let mut jobs = None;
     let mut resume = true;
+    let mut dihedral = true;
     let mut ffmpeg = std::env::var("SFD_FFMPEG").unwrap_or_else(|_| "ffmpeg".to_string());
     let mut ffprobe = std::env::var("SFD_FFPROBE").unwrap_or_else(|_| "ffprobe".to_string());
 
@@ -97,6 +107,7 @@ fn parse_hash_args(mut args: impl Iterator<Item = String>) -> Result<HashOptions
                 );
             }
             "--no-resume" => resume = false,
+            "--no-dihedral" => dihedral = false,
             "--ffmpeg" => ffmpeg = take_value("--ffmpeg")?,
             "--ffprobe" => ffprobe = take_value("--ffprobe")?,
             other if other.starts_with('-') && other != "-" => {
@@ -115,8 +126,67 @@ fn parse_hash_args(mut args: impl Iterator<Item = String>) -> Result<HashOptions
         output: PathBuf::from(output),
         jobs: jobs.unwrap_or_else(default_jobs),
         resume,
+        dihedral,
         ffmpeg,
         ffprobe,
+    })
+}
+
+/// `sfd find` の設定。
+pub struct FindOptions {
+    pub input: PathBuf,
+    pub output: PathBuf,
+    pub threshold: u32,
+    pub min_quality: u8,
+}
+
+fn parse_find_args(mut args: impl Iterator<Item = String>) -> Result<FindOptions, String> {
+    let mut positional = Vec::new();
+    // PDQ が推奨するしきい値。256 ビット中 31 ビット。
+    let mut threshold = 31;
+    let mut min_quality = 0;
+
+    while let Some(arg) = args.next() {
+        let mut take_value = |name: &str| -> Result<String, String> {
+            args.next().ok_or_else(|| format!("{name} には値が必要です"))
+        };
+        match arg.as_str() {
+            "-h" | "--help" => {
+                print!("{USAGE}");
+                std::process::exit(0);
+            }
+            "-t" | "--threshold" => {
+                let value = take_value("--threshold")?;
+                threshold = value
+                    .parse::<u32>()
+                    .ok()
+                    .filter(|n| *n <= 256)
+                    .ok_or_else(|| format!("--threshold には 0..=256 を指定してください: {value}"))?;
+            }
+            "--min-quality" => {
+                let value = take_value("--min-quality")?;
+                min_quality = value
+                    .parse::<u8>()
+                    .ok()
+                    .filter(|n| *n <= 100)
+                    .ok_or_else(|| format!("--min-quality には 0..=100 を指定してください: {value}"))?;
+            }
+            other if other.starts_with('-') && other != "-" => {
+                return Err(format!("不明なオプションです: {other}"))
+            }
+            _ => positional.push(arg),
+        }
+    }
+
+    let [input, output] = positional.as_slice() else {
+        return Err("sfd find <hash.json> <find.json> の形で指定してください".to_string());
+    };
+
+    Ok(FindOptions {
+        input: PathBuf::from(input),
+        output: PathBuf::from(output),
+        threshold,
+        min_quality,
     })
 }
 

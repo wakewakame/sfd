@@ -3,7 +3,7 @@
 //! 1 行 1 JSON (JSONL) で、1 行目が [`Header`]、以降が 1 ファイル 1 行の [`Record`]。
 //! 追記に向いた形なので、中断しても既に書かれたパスを読み飛ばして再開できる。
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::Path;
@@ -69,9 +69,23 @@ pub struct Record {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Frame {
     pub t: f64,
+    /// 元の向きの知覚ハッシュ。
     pub hash: String,
+    /// 回転・反転させた 7 通りのハッシュ。[`DIHEDRAL_NAMES`] の順に並ぶ。
+    ///
+    /// これは知覚ハッシュの計算時にしか作れない (DCT 係数から導くため) ので、
+    /// 後から欲しくなると全ファイルの再スキャンになる。
+    ///
+    /// 比較するときは、片方の `hash` を相手の `hash` と `dihedral` 全部に
+    /// ぶつければよい。変種どうしを総当たりする必要はない。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dihedral: Option<Vec<String>>,
     pub quality: u8,
 }
+
+/// [`Frame::dihedral`] に並ぶ変換の名前と順序。
+pub const DIHEDRAL_NAMES: [&str; 7] =
+    ["rotate90", "rotate180", "rotate270", "flipx", "flipy", "flip-plus-1", "flip-minus-1"];
 
 // ================================================================
 // 読み込み
@@ -108,13 +122,24 @@ impl From<io::Error> for ReadError {
     }
 }
 
-/// 既存の hash.json を読む。存在しなければ `None`。
+/// 読み終えたファイルについて分かったこと。
+struct Scanned {
+    header: Header,
+    /// 末尾行が途中で切れていた。
+    truncated_tail: bool,
+    /// 完結した行までのバイト数。切り捨てるときの長さになる。
+    valid_bytes: u64,
+}
+
+/// hash.json を 1 行ずつ読んで `on_record` に渡す。
 ///
-/// 強制終了で末尾行が途中まで書かれている場合は、その行を切り捨ててから返す。
-/// 途中で切れていられるのは末尾行だけなので、それ以外の壊れた行は破損として扱う。
-///
-/// 数百万行になりうるので、行を溜めずに読み進めてパスだけを残す。
-pub fn read_existing(path: &Path) -> Result<Option<Existing>, ReadError> {
+/// 数百万行になりうるので、行を溜めずに読み進める。強制終了で末尾行が途中まで
+/// 書かれていることがあるが、途中で切れていられるのは末尾行だけなので、それ以外の
+/// 壊れた行は破損として扱う。
+fn scan_lines(
+    path: &Path,
+    mut on_record: impl FnMut(Record),
+) -> Result<Option<Scanned>, ReadError> {
     let file = match File::open(path) {
         Ok(file) => file,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -123,7 +148,6 @@ pub fn read_existing(path: &Path) -> Result<Option<Existing>, ReadError> {
 
     let mut reader = BufReader::new(file);
     let mut header = None;
-    let mut done = HashSet::new();
     let mut truncated_tail = false;
     let mut valid_bytes = 0u64;
     let mut line = Vec::new();
@@ -149,22 +173,12 @@ pub fn read_existing(path: &Path) -> Result<Option<Existing>, ReadError> {
             header = Some(parsed);
         } else {
             match serde_json::from_slice::<Record>(content) {
-                Ok(record) => {
-                    // 同じパスが複数回現れたら後の行が有効。エラー行を再試行する
-                    // 都合で、追記のたびに同じパスが増えうるため。
-                    if record.error.is_some() {
-                        done.remove(&record.path);
-                    } else {
-                        done.insert(record.path);
-                    }
-                }
+                Ok(record) => on_record(record),
                 Err(_) if !complete => {
                     truncated_tail = true;
                     break;
                 }
-                Err(e) => {
-                    return Err(ReadError(format!("{line_number} 行目を読めません: {e}")));
-                }
+                Err(e) => return Err(ReadError(format!("{line_number} 行目を読めません: {e}"))),
             }
         }
         valid_bytes += line.len() as u64;
@@ -173,13 +187,48 @@ pub fn read_existing(path: &Path) -> Result<Option<Existing>, ReadError> {
     let Some(header) = header else {
         return Err(ReadError("空のファイルです".into()));
     };
+    Ok(Some(Scanned { header, truncated_tail, valid_bytes }))
+}
 
-    if truncated_tail {
+/// 既存の hash.json を読んで、再開に必要な情報だけを返す。存在しなければ `None`。
+///
+/// 書きかけの末尾行があれば、追記できるよう切り捨ててから返す。
+pub fn read_existing(path: &Path) -> Result<Option<Existing>, ReadError> {
+    let mut done = HashSet::new();
+    let scanned = scan_lines(path, |record| {
+        // 同じパスが複数回現れたら後の行が有効。エラー行を再試行する都合で、
+        // 追記のたびに同じパスが増えうるため。
+        if record.error.is_some() {
+            done.remove(&record.path);
+        } else {
+            done.insert(record.path);
+        }
+    })?;
+
+    let Some(scanned) = scanned else { return Ok(None) };
+
+    if scanned.truncated_tail {
         // 壊れた末尾行を落としておかないと、追記した内容まで読めなくなる。
-        File::options().write(true).open(path)?.set_len(valid_bytes)?;
+        File::options().write(true).open(path)?.set_len(scanned.valid_bytes)?;
     }
 
-    Ok(Some(Existing { header, done, truncated_tail }))
+    Ok(Some(Existing {
+        header: scanned.header,
+        done,
+        truncated_tail: scanned.truncated_tail,
+    }))
+}
+
+/// hash.json の全レコードを読む。同じパスが複数あれば後の行が有効。
+pub fn read_all(path: &Path) -> Result<Vec<Record>, ReadError> {
+    let mut by_path: HashMap<String, Record> = HashMap::new();
+    let scanned = scan_lines(path, |record| {
+        by_path.insert(record.path.clone(), record);
+    })?;
+    if scanned.is_none() {
+        return Err(ReadError("ファイルがありません".into()));
+    }
+    Ok(by_path.into_values().collect())
 }
 
 // ================================================================
@@ -315,12 +364,12 @@ mod tests {
     /// 画像も動画も同じ形なので、読む側は分岐せずに済む。
     #[test]
     fn images_and_videos_share_one_shape() {
-        let image = sample(None, vec![Frame { t: 0.0, hash: "cd".repeat(32), quality: 100 }]);
+        let image = sample(None, vec![Frame { t: 0.0, hash: "cd".repeat(32), dihedral: None, quality: 100 }]);
         let video = sample(
             Some(123.4),
             vec![
-                Frame { t: 30.85, hash: "cd".repeat(32), quality: 100 },
-                Frame { t: 61.7, hash: "ef".repeat(32), quality: 98 },
+                Frame { t: 30.85, hash: "cd".repeat(32), dihedral: None, quality: 100 },
+                Frame { t: 61.7, hash: "ef".repeat(32), dihedral: None, quality: 98 },
             ],
         );
         // duration の有無だけが画像と動画の違いになる。
@@ -453,7 +502,7 @@ mod tests {
     fn written_records_can_be_read_back() {
         let file = TempFile::with(b"");
         let mut writer = Writer::create(&file.0, "/photos").unwrap();
-        writer.write(&sample(None, vec![Frame { t: 0.0, hash: "ab".repeat(32), quality: 90 }]))
+        writer.write(&sample(None, vec![Frame { t: 0.0, hash: "ab".repeat(32), dihedral: None, quality: 90 }]))
             .unwrap();
         writer.flush().unwrap();
         drop(writer);
