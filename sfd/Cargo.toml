@@ -4,6 +4,9 @@ description = "Similar File Detector"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+# crates.io へは公開しない。うっかり cargo publish するのを防ぐのと、
+# cargo-about の private.ignore で自分自身をライセンス一覧から外すため。
+publish = false
 
 [dependencies]
 pdq = { path = "../pdq" }

@@ -1,0 +1,35 @@
+{{!--
+  cargo about generate 用のテンプレート。設定は about.toml を参照。
+
+  出力は配布物に同梱する法的な表記なので、読み手が日本語話者とは限らない。
+  同じ書庫に入る LICENSE や LICENSE-pdq に合わせて英語で書く。
+
+  {{{ }}} が三重なのは HTML エスケープを避けるため。二重だと BSD 3-Clause の
+  名前に含まれる引用符が &quot; になり、ライセンス本文も壊れる。
+
+  MIT のように著作権者ごとに本文が違うライセンスは、同じ名前の節が何度も並ぶ。
+  どれがどれか分かるよう、見出しに使用クレート名を入れている。
+  この出力は build.sh が LICENSES.md の後半として連結する。前半 (sfd と pdq 自身の
+  ライセンス) はそちらが付けるので、ここでは第三者ぶんだけを見出し ## から書く。
+--}}## Third-party libraries
+
+The executables statically link the libraries listed below. Their copyright
+notices and license texts are reproduced here as those licenses require.
+
+| Library | Version | License |
+| --- | --- | --- |
+{{#each licenses}}{{#each used_by}}| {{crate.name}} | {{crate.version}} | {{{../name}}} |
+{{/each}}{{/each}}
+
+{{#each licenses}}
+## {{#each used_by}}{{#unless @first}}, {{/unless}}{{crate.name}}{{/each}} — {{{name}}}
+
+{{#each used_by}}
+- {{crate.name}} {{crate.version}}{{#if crate.repository}} — {{crate.repository}}{{/if}}
+{{/each}}
+
+```
+{{{text}}}
+```
+
+{{/each}}

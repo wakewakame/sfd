@@ -6,6 +6,9 @@ edition.workspace = true
 # facebook/ThreatExchange (Copyright (c) Meta Platforms, Inc. and affiliates) の
 # BSD 3-Clause なコードからの派生物。詳細と上流の表示は LICENSE を参照。
 license.workspace = true
+# crates.io へは公開しない。うっかり cargo publish するのを防ぐのと、
+# cargo-about の private.ignore で自分自身をライセンス一覧から外すため。
+publish = false
 
 # 依存なし。画像・動画のデコードは phashsum が ffmpeg を子プロセスとして呼ぶ。
 [dependencies]

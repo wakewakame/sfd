@@ -1,0 +1,42 @@
+# 配布物に同梱する依存ライブラリのライセンス表記を作るための設定。
+#
+#   cargo about generate --config docs/credits/about.toml \
+#       --output-file THIRD-PARTY-LICENSES.md docs/credits/about.hbs
+#
+# cargo-about 0.9.1 は cli が既定の feature ではないので、導入は次の形で行う。
+#
+#   cargo install cargo-about --locked --version 0.9.1 --features cli
+#
+# 生成物はリポジトリには置かず、リリース時に CI が作って書庫へ入れる。
+# 置くと Cargo.lock を更新するたびに古くなり、実際の配布物と食い違うため。
+
+# 配布するバイナリのターゲット。ここに挙げた環境で実際にリンクされるものだけを
+# 対象にする (Windows 専用クレートなどを取りこぼさないよう全部並べる)。
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+]
+
+# ビルド時にしか使わないもの (proc-macro など) は配布物に含まれない。
+# ただし判定を誤って表記漏れになるより、多めに載せる方が安全なので残す。
+ignore-build-dependencies = false
+ignore-dev-dependencies = true
+
+# 自分たちのクレート (publish = false) は第三者ではないので一覧から外す。
+private = { ignore = true }
+
+# 上流が本文を同梱していない場合に、SPDX の標準テキストで補う。
+# 現時点では全クレートが本文を同梱しているので出番はないが、依存が増えたときの保険。
+accepted = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-3-Clause",
+    "BSD-2-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]

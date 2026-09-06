@@ -61,16 +61,25 @@ jobs:
       - run: rustup target add ${{ matrix.target }}
       - run: cargo build --release --target ${{ matrix.target }}
 
-      # BSD 3-Clause はバイナリ配布のときも著作権表示の同梱を求めるので、
-      # LICENSE と pdq/LICENSE (上流 Meta の表示) を必ず入れる。
+      # 依存ライブラリはバイナリに静的リンクされる。MIT は「実質的な部分の複製
+      # すべて」への著作権表示の同梱を求めるので、バイナリ配布にも適用される。
+      #
+      # --features cli が要る。0.9.1 では cli が既定の feature ではなく、
+      # 付けないと警告だけ出してバイナリを入れずに終了コード 0 を返す。
+      # 版を固定しているのは再現性のため (dependabot の対象外なので手動で上げる)。
+      - name: ライセンス表記をまとめる
+        shell: bash
+        run: |
+          cargo install cargo-about --locked --version 0.9.1 --features cli
+          sh docs/credits/build.sh
+
       - name: 配布用にまとめる
         shell: bash
         run: |
           set -eu
           name="sfd-${GITHUB_REF_NAME}-${{ matrix.target }}"
           mkdir "$name"
-          cp README.md LICENSE "$name/"
-          cp pdq/LICENSE "$name/LICENSE-pdq"
+          cp README.md LICENSES.md "$name/"
           if [ "${{ runner.os }}" = "Windows" ]; then
             cp "target/${{ matrix.target }}/release/sfd.exe" "target/${{ matrix.target }}/release/phashsum.exe" "$name/"
             7z a "$name.zip" "$name"
