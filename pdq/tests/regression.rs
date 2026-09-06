@@ -140,7 +140,16 @@ fn load(path: &Path) -> Image {
 }
 
 fn threatexchange_root() -> Option<PathBuf> {
-    let root = PathBuf::from(std::env::var_os("PDQ_THREATEXCHANGE")?);
+    let Some(root) = std::env::var_os("PDQ_THREATEXCHANGE") else {
+        // CI では取り違えを防ぐため、スキップ自体を失敗にできるようにしておく。
+        // これがないと「緑だが何も検証していない」状態に誰も気づけない。
+        assert!(
+            std::env::var_os("PDQ_REQUIRE_VECTORS").is_none(),
+            "PDQ_REQUIRE_VECTORS が設定されているのに PDQ_THREATEXCHANGE がありません"
+        );
+        return None;
+    };
+    let root = PathBuf::from(root);
     assert!(
         root.join("pdq/cpp/reg_test/expected/out").exists(),
         "PDQ_THREATEXCHANGE={} に pdq/cpp/reg_test/expected/out がありません",

@@ -1,0 +1,109 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # テストが落ちたら配布しない。
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      # サプライチェーン対策として、各 action はタグではなくコミットハッシュで固定している
+      # (コメントのバージョンは参照用)。更新するときはハッシュとコメントを両方書き換えること。
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - run: cargo clippy --release --all-targets -- -D warnings
+      - run: cargo test --release
+
+      # PDQ の移植がリファレンス実装とビット単位で一致することを確認する。
+      # テスト画像は Meta のものなので同梱しておらず、ここで上流を取得して初めて
+      # 実際に走る。PDQ_REQUIRE_VECTORS を付けているのは、取得に失敗したときに
+      # 黙ってスキップされて「緑だが何も検証していない」状態になるのを防ぐため。
+      - name: ThreatExchange のテストベクタを取得
+        run: |
+          git clone --depth 1 --filter=blob:none --sparse \
+            https://github.com/facebook/ThreatExchange.git "$RUNNER_TEMP/threatexchange"
+          git -C "$RUNNER_TEMP/threatexchange" sparse-checkout set pdq
+      - name: 画像の復号に ffmpeg を使う
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: リファレンス実装との一致を確認
+        env:
+          PDQ_THREATEXCHANGE: ${{ runner.temp }}/threatexchange
+          PDQ_REQUIRE_VECTORS: '1'
+        run: cargo test --release -p pdq --test regression
+
+  build:
+    needs: test
+    strategy:
+      # 1 つの環境で失敗しても、他の環境の結果は見たい。
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - runner: macos-latest
+            target: aarch64-apple-darwin
+          # macos-latest は arm64 だが、SDK に両方入っているので x86_64 も作れる。
+          - runner: macos-latest
+            target: x86_64-apple-darwin
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - run: rustup target add ${{ matrix.target }}
+      - run: cargo build --release --target ${{ matrix.target }}
+
+      # BSD 3-Clause はバイナリ配布のときも著作権表示の同梱を求めるので、
+      # LICENSE と pdq/LICENSE (上流 Meta の表示) を必ず入れる。
+      - name: 配布用にまとめる
+        shell: bash
+        run: |
+          set -eu
+          name="sfd-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          mkdir "$name"
+          cp README.md LICENSE "$name/"
+          cp pdq/LICENSE "$name/LICENSE-pdq"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "target/${{ matrix.target }}/release/sfd.exe" "target/${{ matrix.target }}/release/phashsum.exe" "$name/"
+            7z a "$name.zip" "$name"
+          else
+            cp "target/${{ matrix.target }}/release/sfd" "target/${{ matrix.target }}/release/phashsum" "$name/"
+            tar czf "$name.tar.gz" "$name"
+          fi
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sfd-${{ matrix.target }}
+          path: |
+            *.tar.gz
+            *.zip
+          if-no-files-found: error
+
+  release:
+    needs: build
+    # 手動実行 (workflow_dispatch) ではビルドの確認だけして、リリースは作らない。
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist
+          merge-multiple: true
+
+      # gh は runner に最初から入っているので、リリース作成のために
+      # サードパーティの action を増やさずに済む。
+      - name: リリースを作る
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --generate-notes --verify-tag
