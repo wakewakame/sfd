@@ -2,8 +2,12 @@ name: Release
 
 on:
   push:
+    branches:
+      - main
     tags:
       - 'v*.*.*'
+  # dependabot が上げてくる更新を検証するため、PR でもテストする。
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -38,8 +42,38 @@ jobs:
           PDQ_REQUIRE_VECTORS: '1'
         run: cargo test --release -p pdq --test regression
 
-  build:
+  # ライセンス表記は配布するどの環境でも同じ内容 (about.toml に全ターゲットを
+  # 並べてある) なので、1 回だけ作って build の各ジョブへ配る。ここを分けないと
+  # cargo-about のインストールに 1 分かかるのを 4 回繰り返すことになる。
+  licenses:
     needs: test
+    # タグかリリースの手動実行のときだけ必要。PR では作らない。
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # 依存ライブラリはバイナリに静的リンクされる。MIT は「実質的な部分の複製
+      # すべて」への著作権表示の同梱を求めるので、バイナリ配布にも適用される。
+      #
+      # --features cli が要る。0.9.1 では cli が既定の feature ではなく、
+      # 付けないと警告だけ出してバイナリを入れずに終了コード 0 を返す。
+      # 版を固定しているのは再現性のため (dependabot の対象外なので手動で上げる)。
+      - name: ライセンス表記をまとめる
+        run: |
+          cargo install cargo-about --locked --version 0.9.1 --features cli
+          sh docs/credits/build.sh
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: licenses
+          path: LICENSES.md
+          if-no-files-found: error
+
+  build:
+    needs: licenses
+    # 配布物を作るのはタグか手動実行のときだけ。PR ではテストまでで十分。
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
     strategy:
       # 1 つの環境で失敗しても、他の環境の結果は見たい。
       fail-fast: false
@@ -61,17 +95,9 @@ jobs:
       - run: rustup target add ${{ matrix.target }}
       - run: cargo build --release --target ${{ matrix.target }}
 
-      # 依存ライブラリはバイナリに静的リンクされる。MIT は「実質的な部分の複製
-      # すべて」への著作権表示の同梱を求めるので、バイナリ配布にも適用される。
-      #
-      # --features cli が要る。0.9.1 では cli が既定の feature ではなく、
-      # 付けないと警告だけ出してバイナリを入れずに終了コード 0 を返す。
-      # 版を固定しているのは再現性のため (dependabot の対象外なので手動で上げる)。
-      - name: ライセンス表記をまとめる
-        shell: bash
-        run: |
-          cargo install cargo-about --locked --version 0.9.1 --features cli
-          sh docs/credits/build.sh
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: licenses
 
       - name: 配布用にまとめる
         shell: bash
@@ -104,8 +130,11 @@ jobs:
     permissions:
       contents: write
     steps:
+      # pattern で絞らないと licenses ジョブの成果物まで降りてきて、各書庫の中に
+      # 入っているのと同じ LICENSES.md がリリースページにも単体で並んでしまう。
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
+          pattern: sfd-*
           path: dist
           merge-multiple: true
 
