@@ -27,14 +27,14 @@ impl Tools {
             .args(["-show_entries", "format=duration:stream=duration", "-of", "json"])
             .arg(path)
             .output()
-            .map_err(|e| format!("ffprobe ({}) を起動できませんでした: {e}", self.ffprobe))?;
+            .map_err(|e| format!("cannot run ffprobe ({}): {e}", self.ffprobe))?;
 
         if !output.status.success() {
-            return Err(format!("ffprobe が失敗しました: {}", error_message(&output.stderr)));
+            return Err(format!("ffprobe failed: {}", error_message(&output.stderr)));
         }
 
         let parsed: serde_json::Value = serde_json::from_slice(&output.stdout)
-            .map_err(|e| format!("ffprobe の出力を読めません: {e}"))?;
+            .map_err(|e| format!("cannot parse the ffprobe output: {e}"))?;
 
         // コンテナ全体の尺を優先し、無ければ映像ストリームの尺を使う。
         let duration = parsed
@@ -48,7 +48,7 @@ impl Tools {
 
         match duration {
             Some(seconds) if seconds.is_finite() && seconds > 0.0 => Ok(seconds),
-            _ => Err("尺を取得できませんでした".to_string()),
+            _ => Err("cannot determine the duration".to_string()),
         }
     }
 
@@ -92,13 +92,13 @@ impl Tools {
 
         let output = command
             .output()
-            .map_err(|e| format!("ffmpeg ({}) を起動できませんでした: {e}", self.ffmpeg))?;
+            .map_err(|e| format!("cannot run ffmpeg ({}): {e}", self.ffmpeg))?;
 
         if !output.status.success() {
-            return Err(format!("ffmpeg が失敗しました: {}", error_message(&output.stderr)));
+            return Err(format!("ffmpeg failed: {}", error_message(&output.stderr)));
         }
         if output.stdout.is_empty() {
-            return Err("ffmpeg がフレームを出力しませんでした".to_string());
+            return Err("ffmpeg produced no frame".to_string());
         }
 
         let mut image = pdq::netpbm::parse(output.stdout).map_err(|e| e.to_string())?;
@@ -120,7 +120,7 @@ fn error_message(stderr: &[u8]) -> String {
         .lines()
         .map(strip_context_prefixes)
         .find(|line| !line.is_empty())
-        .unwrap_or_else(|| "詳細不明".to_string())
+        .unwrap_or_else(|| "no details".to_string())
 }
 
 fn strip_context_prefixes(line: &str) -> String {
@@ -156,7 +156,7 @@ mod tests {
     fn picks_the_first_meaningful_stderr_line() {
         assert_eq!(error_message(b"a\nb\n"), "a");
         assert_eq!(error_message(b"\n\nb\n"), "b");
-        assert_eq!(error_message(b""), "詳細不明");
+        assert_eq!(error_message(b""), "no details");
         assert_eq!(error_message(b"  only line  \n"), "only line");
     }
 

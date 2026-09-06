@@ -76,7 +76,7 @@ pub struct UnsupportedChannels(pub usize);
 
 impl fmt::Display for UnsupportedChannels {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "対応していないチャンネル数です: {} (1 か 3 のみ)", self.0)
+        write!(f, "unsupported channel count: {} (only 1 or 3)", self.0)
     }
 }
 
@@ -154,7 +154,7 @@ impl DihedralHashes {
             .into_iter()
             .map(|(kind, hash)| (kind, hash.hamming_distance(other)))
             .min_by_key(|&(_, distance)| distance)
-            .expect("all() は常に 8 要素を返す")
+            .expect("all() always yields 8 entries")
     }
 }
 
@@ -231,7 +231,7 @@ impl Hasher {
         assert_eq!(
             image.data.len(),
             n * image.channels,
-            "画素データの長さが寸法と一致しません"
+            "pixel data length does not match the dimensions"
         );
 
         self.luma.clear();

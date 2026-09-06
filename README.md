@@ -1,10 +1,10 @@
 # SFD (Similar File Detector)
 
-膨大にある画像・動画ファイルの中から類似のファイルを検出するためのツールです。
+Finds similar files among large collections of images and videos.
 
-デコードに [ffmpeg](https://ffmpeg.org/) と ffprobe を使うので、あらかじめインストールしておいてください。
+Decoding is done by [ffmpeg](https://ffmpeg.org/) and ffprobe, so install those first.
 
-# 使い方
+# Usage
 
 ## sfd hash
 
@@ -12,38 +12,41 @@
 $ sfd hash ./dir/ hash.json
 ```
 
-./dir 以下の全ての画像・動画ファイルを再帰的に探索し、その知覚ハッシュ等を hash.json に出力する。
+Walks `./dir` recursively and writes the perceptual hash of every image and video to `hash.json`.
 
-中断しても、同じコマンドをもう一度実行すれば続きから再開する。
+If the run is interrupted, running the same command again continues where it left off.
 
-hash.json は 1 行 1 JSON (JSONL) で、1 行目をヘッダとする。
+`hash.json` holds one JSON object per line (JSONL), with the first line as a header.
 
 ```sh
 $ cat hash.json
 {"v":1,"root":"./dir"}
 {"path":"1.jpg","bytes":100,"mtime":"2026-09-02T01:23:45Z","sha256":"xxx","width":4032,"height":3024,"pdq":[{"t":0.0,"hash":"xxx","dihedral":["xxx",...],"quality":100}]}
-{"path":"3.mp4","bytes":300,"mtime":"2026-07-01T09:30:00Z","sha256":"xxx","width":1920,"height":1080,"duration":123.4,"pdq":[{"t":30.8,...},{"t":61.7,...},{"t":92.5,...}]}
-{"path":"4.jpg","bytes":50,"mtime":"2026-06-15T18:00:00Z","sha256":"xxx","error":"ffmpeg が失敗しました: ..."}
+{"path":"3.mp4","bytes":300,"mtime":"2026-07-01T09:30:00Z","sha256":"xxx","width":1920,"height":1080,"duration":123.4,"pdq":[{"t":30.8,"hash":"xxx","dihedral":[...],"quality":100},{"t":61.7,...},{"t":92.5,...}]}
+{"path":"4.jpg","bytes":50,"mtime":"2026-06-15T18:00:00Z","sha256":"xxx","error":"ffmpeg failed: ..."}
+{"path":"5-locked","mtime":"2026-05-01T00:00:00Z","error":"cannot read the directory: Permission denied (os error 13)"}
 ```
 
-| フィールド | 内容 |
+| Field | Meaning |
 | --- | --- |
-| `path` | ヘッダの `root` からの相対パス |
-| `pdq` | 知覚ハッシュ。画像も「1 フレームの動画」として同じ形で持つ |
-| `t` | 動画のどの位置のフレームか (秒)。画像は 0 |
-| `dihedral` | 回転・反転させた 7 通りのハッシュ |
-| `duration` | 動画の尺 (秒)。これを持つかどうかが画像と動画の区別になる |
-| `quality` | 0..=100。のっぺりした画像ほど低い |
-| `error` | 処理に失敗したもの。読めなかったディレクトリもここに残る |
+| `path` | relative to `root` in the header |
+| `pdq` | perceptual hashes. An image is stored as a one-frame video, so the shape never changes |
+| `t` | position of the frame within a video, in seconds. Always 0 for images |
+| `dihedral` | the same frame rotated and flipped, 7 hashes in total |
+| `duration` | length of a video in seconds. Its presence is what distinguishes videos from images |
+| `quality` | 0..=100. Lower for flat, featureless images |
+| `error` | the file could not be processed. Unreadable directories are recorded here too |
 
-読み取るときの注意:
+When reading the file:
 
-- 同じ `path` の行が複数あれば、**後の行が有効**
-- 読めなかったものは `bytes` や `sha256` を持たないことがある
+- if the same `path` appears more than once, **the last line wins**
+- entries that could not be read may be missing `bytes` or `sha256`
 
-`--no-dihedral` を付けると hash.json は小さくなるが、回転したコピーを検出できなくなる。**これは知覚ハッシュの計算時にしか作れない**ので、後から必要になると全ファイルの再スキャンになる。
+Passing `--no-dihedral` makes `hash.json` smaller but gives up finding rotated copies.
+**Those hashes can only be produced while hashing**, so wanting them later means
+rescanning every file.
 
-その他のオプションは `sfd hash --help` を参照。
+See `sfd hash --help` for the remaining options.
 
 ## sfd find
 
@@ -51,9 +54,11 @@ $ cat hash.json
 $ sfd find hash.json find.json
 ```
 
-hash.json を元に、似ているファイルをまとめて find.json に出力する。
+Reads `hash.json` and writes groups of similar files to `find.json`.
 
-先頭のファイルから順に、しきい値以内にある他のファイルを列挙する。一度どこかのグループに現れたファイルは、以降のグループには現れない。似たファイルが 1 つもないものは出力しない。
+Starting from the first file, everything within the threshold is listed under it.
+A file that has already appeared in one group never appears in another. Files with
+no similar counterpart are omitted.
 
 ```sh
 $ cat find.json
@@ -61,19 +66,26 @@ $ cat find.json
 {"path":"1.jpg","bytes":100,"width":4032,"height":3024,"similar":[{"path":"1-copy.jpg","distance":0,"identical":true,"bytes":100,"width":4032,"height":3024},{"path":"1-rotated.jpg","distance":18,"transform":"rotate270","bytes":90,"width":3024,"height":4032}]}
 ```
 
-| フィールド | 内容 |
+| Field | Meaning |
 | --- | --- |
-| `path` | グループの先頭。バイト数・解像度の大きいものが来るので、残す候補になりやすい |
-| `distance` | 先頭との距離 (0..=256)。小さいほど似ている |
-| `identical` | 先頭と sha256 が一致する。見た目を比べるまでもなく片方を消してよい |
-| `transform` | 回転・反転させた状態で一致した場合の変換名 |
+| `path` | head of the group. Ordered by size then resolution, so it tends to be the copy worth keeping |
+| `distance` | distance from the head (0..=256). Smaller means more similar |
+| `identical` | the sha256 matches the head. One of them can be deleted without looking |
+| `transform` | set when the match only holds after rotating or flipping |
 
-画像と動画は比較しない。動画は 3 箇所すべてが一致することを要求する。
+How the comparison works:
 
-しきい値は `--threshold` で、品質による足切りは `--min-quality` で変えられる。詳しくは `sfd find --help` を参照。
+- **images and videos are never compared** with each other (told apart by `duration`)
+- **for videos, all three sampled positions must match** pairwise. Accepting a single
+  match would produce false positives, since black and white frames are common
+- `--threshold` changes the cutoff and `--min-quality` skips low-quality entries
 
-# ライセンス
+# License
 
 BSD 3-Clause License ([LICENSE](LICENSE))
 
-`pdq/` は [facebook/ThreatExchange](https://github.com/facebook/ThreatExchange/tree/main/pdq) の PDQ リファレンス実装 (Copyright (c) Meta Platforms, Inc. and affiliates、BSD 3-Clause) を Rust に移植したものです。上流の著作権表示と、どのファイルが何の派生物かは [pdq/LICENSE](pdq/LICENSE) にあります。本プロジェクトは Meta Platforms, Inc. とは無関係です。
+`pdq/` is a Rust port of the PDQ reference implementation from
+[facebook/ThreatExchange](https://github.com/facebook/ThreatExchange/tree/main/pdq)
+(Copyright (c) Meta Platforms, Inc. and affiliates, BSD 3-Clause). The upstream
+notice, and which files are derived from what, are in [pdq/LICENSE](pdq/LICENSE).
+This project is not affiliated with Meta Platforms, Inc.

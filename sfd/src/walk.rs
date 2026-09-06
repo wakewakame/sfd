@@ -94,7 +94,7 @@ pub fn walk(root: &Path, mut on_progress: impl FnMut(usize)) -> Walked {
         let entries = match std::fs::read_dir(&directory) {
             Ok(entries) => entries,
             Err(e) => {
-                walked.push_unreadable(root, &directory, format_args!("ディレクトリを読めません: {e}"));
+                walked.push_unreadable(root, &directory, format_args!("cannot read the directory: {e}"));
                 continue;
             }
         };
@@ -107,7 +107,7 @@ pub fn walk(root: &Path, mut on_progress: impl FnMut(usize)) -> Walked {
                 Err(e) => walked.push_unreadable(
                     root,
                     &directory,
-                    format_args!("ディレクトリの中身を読めません: {e}"),
+                    format_args!("cannot read a directory entry: {e}"),
                 ),
             }
         }
@@ -118,7 +118,7 @@ pub fn walk(root: &Path, mut on_progress: impl FnMut(usize)) -> Walked {
             let metadata = match std::fs::symlink_metadata(&path) {
                 Ok(metadata) => metadata,
                 Err(e) => {
-                    walked.push_unreadable(root, &path, format_args!("情報を取得できません: {e}"));
+                    walked.push_unreadable(root, &path, format_args!("cannot stat: {e}"));
                     continue;
                 }
             };
@@ -137,7 +137,7 @@ pub fn walk(root: &Path, mut on_progress: impl FnMut(usize)) -> Walked {
             // パスを UTF-8 の相対パスにできないと hash.json に書けない。
             // 黙って飛ばすと結果から欠けたことに気づけないので、これも記録する。
             let Some(relative) = relative_path(root, &path) else {
-                walked.push_unreadable(root, &path, "パスを UTF-8 として扱えません");
+                walked.push_unreadable(root, &path, "the path is not valid UTF-8");
                 continue;
             };
 

@@ -15,7 +15,7 @@ use std::process::ExitCode;
 
 use serde::Serialize;
 
-use crate::progress::Reporter;
+use crate::progress::{self, Reporter};
 use crate::record::{self, Record, DIHEDRAL_NAMES};
 use crate::FindOptions;
 
@@ -24,14 +24,14 @@ const FORMAT_VERSION: u32 = 1;
 
 pub fn run(options: FindOptions) -> Result<ExitCode, String> {
     let records = record::read_all(&options.input)
-        .map_err(|e| format!("{} を読めません: {e}", options.input.display()))?;
+        .map_err(|e| format!("cannot read {}: {e}", options.input.display()))?;
 
     let total = records.len();
     let mut entries: Vec<Entry> = records
         .into_iter()
         .filter_map(|record| Entry::from_record(record, options.min_quality))
         .collect();
-    eprintln!("比較対象: {} 件 (hash.json の {total} 件のうち)", entries.len());
+    eprintln!("Comparing {} of the {total} entries in hash.json", entries.len());
 
     // 走査順で結果が変わる方式なので、順序を固定しないと実行のたびに出力が変わる。
     // 大きいものを先頭に持ってくると、残す候補がグループの先頭に来る。
@@ -48,11 +48,11 @@ pub fn run(options: FindOptions) -> Result<ExitCode, String> {
     let grouped: usize = groups.iter().map(|g| 1 + g.similar.len()).sum();
 
     write_output(&options.output, options.threshold, &groups)
-        .map_err(|e| format!("{} に書き出せません: {e}", options.output.display()))?;
+        .map_err(|e| format!("cannot write {}: {e}", options.output.display()))?;
 
     eprintln!(
-        "似ているファイル: {grouped} 件が {} グループ {:.1} 秒",
-        groups.len(),
+        "Found {grouped} similar files in {} in {:.1}s",
+        progress::plural(groups.len(), "group"),
         reporter.elapsed().as_secs_f64()
     );
     Ok(ExitCode::SUCCESS)

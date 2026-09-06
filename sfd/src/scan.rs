@@ -11,21 +11,21 @@ use std::time::{Duration, Instant};
 use sha2::{Digest, Sha256};
 
 use crate::media::{self, Tools};
-use crate::progress::Reporter;
+use crate::progress::{self, Reporter};
 use crate::record::{self, Frame, Record};
 use crate::walk::{self, Found, Kind};
 use crate::HashOptions;
 
 pub fn run(options: HashOptions) -> Result<ExitCode, String> {
     if !options.root.is_dir() {
-        return Err(format!("ディレクトリではありません: {}", options.root.display()));
+        return Err(format!("not a directory: {}", options.root.display()));
     }
     let root_label = options.root.display().to_string();
 
     // 既に記録済みのパスを拾う。--no-resume なら最初からやり直す。
     let existing = if options.resume {
         record::read_existing(&options.output)
-            .map_err(|e| format!("{} を読めません: {e}", options.output.display()))?
+            .map_err(|e| format!("cannot read {}: {e}", options.output.display()))?
     } else {
         None
     };
@@ -33,22 +33,22 @@ pub fn run(options: HashOptions) -> Result<ExitCode, String> {
     if let Some(existing) = &existing {
         if existing.header.root != root_label {
             return Err(format!(
-                "{} は別のディレクトリ ({}) の結果です。\n\
-                 同じディレクトリを指定するか、--no-resume で最初からやり直してください",
+                "{} holds the result for a different directory ({}).\n\
+                 Pass the same directory, or start over with --no-resume",
                 options.output.display(),
                 existing.header.root
             ));
         }
         if existing.truncated_tail {
-            eprintln!("sfd: 中断時に書きかけだった末尾の 1 行を切り捨てました");
+            eprintln!("sfd: dropped a partially written last line left by an interrupted run");
         }
     }
 
     // 探索。件数が確定してからでないと進捗を割合で出せない。
     let mut reporter = Reporter::new();
-    let walked = walk::walk(&options.root, |count| reporter.counting("探索中...", count));
+    let walked = walk::walk(&options.root, |count| reporter.counting("Scanning...", count));
     reporter.finish();
-    eprintln!("探索完了: {} 件", walked.files.len());
+    eprintln!("Found {}", progress::plural(walked.files.len(), "file"));
 
     let done = existing.as_ref().map(|e| &e.done);
     let found_count = walked.files.len();
@@ -60,10 +60,10 @@ pub fn run(options: HashOptions) -> Result<ExitCode, String> {
 
     let skipped = found_count - todo.len();
     if skipped > 0 {
-        eprintln!("うち {skipped} 件は記録済みなので飛ばします");
+        eprintln!("Skipping {skipped} already recorded");
     }
     if todo.is_empty() && walked.unreadable.is_empty() {
-        eprintln!("処理するファイルはありません");
+        eprintln!("Nothing to do");
         return Ok(ExitCode::SUCCESS);
     }
 
@@ -71,7 +71,7 @@ pub fn run(options: HashOptions) -> Result<ExitCode, String> {
         Some(_) => record::Writer::append(&options.output),
         None => record::Writer::create(&options.output, &root_label),
     }
-    .map_err(|e| format!("{} を開けません: {e}", options.output.display()))?;
+    .map_err(|e| format!("cannot open {}: {e}", options.output.display()))?;
 
     // 読めなかったものを先に書き出す。件数が少なく、ハッシュ計算より先に
     // 目に入った方が気づきやすい。
@@ -90,20 +90,21 @@ pub fn run(options: HashOptions) -> Result<ExitCode, String> {
         };
         writer
             .write(&record)
-            .map_err(|e| format!("{} に書き出せません: {e}", options.output.display()))?;
+            .map_err(|e| format!("cannot write {}: {e}", options.output.display()))?;
     }
 
     let tools = Tools { ffmpeg: options.ffmpeg.clone(), ffprobe: options.ffprobe.clone() };
     let summary = hash_all(&todo, &tools, options.jobs, &mut writer, options.dihedral, &mut reporter)?;
 
-    writer.flush().map_err(|e| format!("{} に書き出せません: {e}", options.output.display()))?;
+    writer.flush().map_err(|e| format!("cannot write {}: {e}", options.output.display()))?;
 
     // 探索時に読めなかったものもエラーとして数える。数えないと、ディレクトリが
     // まるごと欠けているのに終了コードが 0 になり、誰も気づけない。
     let errors = summary.errors + walked.unreadable.len();
     eprintln!(
-        "完了: {} 件 (エラー {errors} 件、内容が同一で再利用 {} 件) {:.1} 秒",
-        summary.total + walked.unreadable.len(),
+        "Done: {}, {}, {} reused as identical, in {:.1}s",
+        progress::plural(summary.total + walked.unreadable.len(), "file"),
+        progress::plural(errors, "error"),
         summary.reused,
         summary.elapsed.as_secs_f64()
     );
@@ -175,7 +176,7 @@ fn hash_all(
 
             // 途中で落ちても再開できるよう、1 件ごとに書き出す。
             if let Err(e) = writer.write(&record).and_then(|()| writer.flush()) {
-                write_error = Some(format!("書き出しに失敗しました: {e}"));
+                write_error = Some(format!("cannot write the output: {e}"));
                 break;
             }
 
@@ -215,7 +216,7 @@ fn process(
     let sha256 = match sha256_file(&found.path) {
         Ok(sha256) => sha256,
         Err(e) => {
-            record.error = Some(format!("読み込みに失敗しました: {e}"));
+            record.error = Some(format!("cannot read the file: {e}"));
             return (record, false);
         }
     };
@@ -283,7 +284,7 @@ fn compute(found: &Found, tools: &Tools, dihedral: bool) -> Computed {
                         }
                     }
                     Err(e) => {
-                        computed.error = Some(format!("{at:.1} 秒地点: {e}"));
+                        computed.error = Some(format!("at {at:.1}s: {e}"));
                         return computed;
                     }
                 }

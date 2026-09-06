@@ -11,30 +11,32 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 const USAGE: &str = "\
-使い方: sfd <サブコマンド> [オプション]
+Usage: sfd <COMMAND> [OPTION]...
 
-サブコマンド:
-  hash <ディレクトリ> <hash.json>   画像・動画を再帰的に探索してハッシュを計算する
-  find <hash.json> <find.json>      hash.json を元に似ているファイルをまとめる
+Commands:
+  hash <DIRECTORY> <hash.json>   walk a directory and hash every image and video
+  find <hash.json> <find.json>   group similar files using hash.json
 
-sfd hash のオプション:
-  -j, --jobs N       並列数 (既定: CPU 数)
-      --no-resume    既存の hash.json を無視して最初からやり直す
-      --no-dihedral  回転・反転版のハッシュを記録しない。hash.json は小さくなるが、
-                     回転したコピーを検出できなくなる。これは計算時にしか作れない
-                     ので、後から欲しくなると全ファイルの再スキャンになる
-      --ffmpeg PATH  ffmpeg の実行ファイル (環境変数 SFD_FFMPEG でも可)
-      --ffprobe PATH ffprobe の実行ファイル (環境変数 SFD_FFPROBE でも可)
+Options for sfd hash:
+  -j, --jobs N       number of files to process in parallel (default: CPU count)
+      --no-resume    ignore an existing hash.json and start over
+      --no-dihedral  do not record the rotated and flipped hashes. hash.json
+                     gets smaller, but rotated copies can no longer be found.
+                     These can only be produced while hashing, so wanting them
+                     later means rescanning every file
+      --ffmpeg PATH  ffmpeg executable to use (or set SFD_FFMPEG)
+      --ffprobe PATH ffprobe executable to use (or set SFD_FFPROBE)
 
-sfd find のオプション:
-  -t, --threshold N    一致とみなすハミング距離の上限 (0..=256、既定: 31)
-      --min-quality N  品質指標がこの値未満のファイルを比較から外す (既定: 0)
+Options for sfd find:
+  -t, --threshold N    largest Hamming distance still considered a match
+                       (0..=256, default: 31)
+      --min-quality N  skip files whose quality metric is below this (default: 0)
 
-共通のオプション:
-  -h, --help         この使い方を表示する
+Common options:
+  -h, --help         show this help
 
-エラーが起きても処理は止めず、hash.json に \"error\" を持つ行として残す。
-進捗は標準エラー出力に出す。
+Errors do not stop the run; they are kept in hash.json as lines carrying an
+\"error\" field. Progress is written to stderr.
 ";
 
 fn main() -> ExitCode {
@@ -65,7 +67,7 @@ fn run() -> Result<ExitCode, String> {
     match subcommand.as_str() {
         "hash" => scan::run(parse_hash_args(args)?),
         "find" => find::run(parse_find_args(args)?),
-        other => Err(format!("不明なサブコマンドです: {other}")),
+        other => Err(format!("unknown command: {other}")),
     }
 }
 
@@ -90,7 +92,7 @@ fn parse_hash_args(mut args: impl Iterator<Item = String>) -> Result<HashOptions
 
     while let Some(arg) = args.next() {
         let mut take_value = |name: &str| -> Result<String, String> {
-            args.next().ok_or_else(|| format!("{name} には値が必要です"))
+            args.next().ok_or_else(|| format!("{name} requires a value"))
         };
         match arg.as_str() {
             "-h" | "--help" => {
@@ -104,7 +106,7 @@ fn parse_hash_args(mut args: impl Iterator<Item = String>) -> Result<HashOptions
                         .parse::<usize>()
                         .ok()
                         .filter(|n| *n > 0)
-                        .ok_or_else(|| format!("--jobs には 1 以上の整数を指定してください: {value}"))?,
+                        .ok_or_else(|| format!("--jobs takes an integer of 1 or more: {value}"))?,
                 );
             }
             "--no-resume" => resume = false,
@@ -112,14 +114,14 @@ fn parse_hash_args(mut args: impl Iterator<Item = String>) -> Result<HashOptions
             "--ffmpeg" => ffmpeg = take_value("--ffmpeg")?,
             "--ffprobe" => ffprobe = take_value("--ffprobe")?,
             other if other.starts_with('-') && other != "-" => {
-                return Err(format!("不明なオプションです: {other}"))
+                return Err(format!("unknown option: {other}"))
             }
             _ => positional.push(arg),
         }
     }
 
     let [root, output] = positional.as_slice() else {
-        return Err("sfd hash <ディレクトリ> <hash.json> の形で指定してください".to_string());
+        return Err("expected: sfd hash <DIRECTORY> <hash.json>".to_string());
     };
 
     Ok(HashOptions {
@@ -149,7 +151,7 @@ fn parse_find_args(mut args: impl Iterator<Item = String>) -> Result<FindOptions
 
     while let Some(arg) = args.next() {
         let mut take_value = |name: &str| -> Result<String, String> {
-            args.next().ok_or_else(|| format!("{name} には値が必要です"))
+            args.next().ok_or_else(|| format!("{name} requires a value"))
         };
         match arg.as_str() {
             "-h" | "--help" => {
@@ -162,7 +164,7 @@ fn parse_find_args(mut args: impl Iterator<Item = String>) -> Result<FindOptions
                     .parse::<u32>()
                     .ok()
                     .filter(|n| *n <= 256)
-                    .ok_or_else(|| format!("--threshold には 0..=256 を指定してください: {value}"))?;
+                    .ok_or_else(|| format!("--threshold takes a value in 0..=256: {value}"))?;
             }
             "--min-quality" => {
                 let value = take_value("--min-quality")?;
@@ -170,17 +172,17 @@ fn parse_find_args(mut args: impl Iterator<Item = String>) -> Result<FindOptions
                     .parse::<u8>()
                     .ok()
                     .filter(|n| *n <= 100)
-                    .ok_or_else(|| format!("--min-quality には 0..=100 を指定してください: {value}"))?;
+                    .ok_or_else(|| format!("--min-quality takes a value in 0..=100: {value}"))?;
             }
             other if other.starts_with('-') && other != "-" => {
-                return Err(format!("不明なオプションです: {other}"))
+                return Err(format!("unknown option: {other}"))
             }
             _ => positional.push(arg),
         }
     }
 
     let [input, output] = positional.as_slice() else {
-        return Err("sfd find <hash.json> <find.json> の形で指定してください".to_string());
+        return Err("expected: sfd find <hash.json> <find.json>".to_string());
     };
 
     Ok(FindOptions {

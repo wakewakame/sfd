@@ -37,7 +37,7 @@ impl Reporter {
     /// 総数がまだ分からない段階の表示。
     pub fn counting(&mut self, label: &str, count: usize) {
         if self.due() {
-            self.print(format_args!("{label} {count} 件"));
+            self.print(format_args!("{label} {count}"));
         }
     }
 
@@ -55,7 +55,7 @@ impl Reporter {
             format_duration(per_item * total.saturating_sub(done) as f64)
         };
         let label = tail(label, 34);
-        self.print(format_args!("{done}/{total} ({percent:.1}%) 残り約 {remaining}  {label:<34}"));
+        self.print(format_args!("{done}/{total} ({percent:.1}%) ~{remaining} left  {label:<34}"));
     }
 
     /// 書きかけの行を消して行頭に戻る。次の出力に移る前に呼ぶ。
@@ -86,11 +86,20 @@ impl Default for Reporter {
     }
 }
 
+/// 英語の複数形。件数を伴う語がいくつかあるので、そのたびに書かずに済ませる。
+pub fn plural(count: usize, singular: &str) -> String {
+    if count == 1 {
+        format!("{count} {singular}")
+    } else {
+        format!("{count} {singular}s")
+    }
+}
+
 fn format_duration(seconds: f64) -> String {
     match seconds as u64 {
-        s if s < 60 => format!("{s}秒"),
-        s if s < 3600 => format!("{}分", s / 60),
-        s => format!("{}時間{}分", s / 3600, s % 3600 / 60),
+        s if s < 60 => format!("{s}s"),
+        s if s < 3600 => format!("{}m", s / 60),
+        s => format!("{}h{}m", s / 3600, s % 3600 / 60),
     }
 }
 
@@ -120,11 +129,11 @@ mod tests {
 
     #[test]
     fn formats_remaining_time_by_magnitude() {
-        assert_eq!(format_duration(0.4), "0秒");
-        assert_eq!(format_duration(59.9), "59秒");
-        assert_eq!(format_duration(60.0), "1分");
-        assert_eq!(format_duration(3599.0), "59分");
-        assert_eq!(format_duration(3600.0), "1時間0分");
-        assert_eq!(format_duration(7860.0), "2時間11分");
+        assert_eq!(format_duration(0.4), "0s");
+        assert_eq!(format_duration(59.9), "59s");
+        assert_eq!(format_duration(60.0), "1m");
+        assert_eq!(format_duration(3599.0), "59m");
+        assert_eq!(format_duration(3600.0), "1h0m");
+        assert_eq!(format_duration(7860.0), "2h11m");
     }
 }

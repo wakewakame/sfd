@@ -41,7 +41,7 @@ pub fn reference_downsample(image: &mut Image) {
 /// そちらでは同じ画素にならない。
 pub fn resize_nearest(image: &Image, dst_height: usize, dst_width: usize) -> Vec<u8> {
     let Image { width, height, channels, data } = image;
-    assert_eq!(data.len(), height * width * channels, "画素データの長さが寸法と一致しません");
+    assert_eq!(data.len(), height * width * channels, "pixel data length does not match the dimensions");
     assert!(dst_height > 0 && dst_width > 0);
 
     let col_map: Vec<usize> = (0..dst_width)

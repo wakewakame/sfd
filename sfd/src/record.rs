@@ -163,10 +163,10 @@ fn scan_lines(
 
         if line_number == 1 {
             let parsed: Header = serde_json::from_slice(content)
-                .map_err(|e| ReadError(format!("1 行目をヘッダとして読めません: {e}")))?;
+                .map_err(|e| ReadError(format!("cannot read line 1 as a header: {e}")))?;
             if parsed.v != FORMAT_VERSION {
                 return Err(ReadError(format!(
-                    "形式のバージョンが違います (このファイル: {}, このコマンド: {FORMAT_VERSION})",
+                    "format version mismatch (file: {}, this build: {FORMAT_VERSION})",
                     parsed.v
                 )));
             }
@@ -178,14 +178,14 @@ fn scan_lines(
                     truncated_tail = true;
                     break;
                 }
-                Err(e) => return Err(ReadError(format!("{line_number} 行目を読めません: {e}"))),
+                Err(e) => return Err(ReadError(format!("cannot read line {line_number}: {e}"))),
             }
         }
         valid_bytes += line.len() as u64;
     }
 
     let Some(header) = header else {
-        return Err(ReadError("空のファイルです".into()));
+        return Err(ReadError("the file is empty".into()));
     };
     Ok(Some(Scanned { header, truncated_tail, valid_bytes }))
 }
@@ -226,7 +226,7 @@ pub fn read_all(path: &Path) -> Result<Vec<Record>, ReadError> {
         by_path.insert(record.path.clone(), record);
     })?;
     if scanned.is_none() {
-        return Err(ReadError("ファイルがありません".into()));
+        return Err(ReadError("the file does not exist".into()));
     }
     Ok(by_path.into_values().collect())
 }
@@ -481,14 +481,14 @@ mod tests {
     fn corrupt_line_is_rejected() {
         let file = TempFile::with(format!("{HEADER}\nこわれた\n{ROW_A}\n").as_bytes());
         let error = read_existing(&file.0).unwrap_err().to_string();
-        assert!(error.contains("2 行目"), "{error}");
+        assert!(error.contains("line 2"), "{error}");
     }
 
     #[test]
     fn version_mismatch_is_rejected() {
         let file = TempFile::with(b"{\"v\":999,\"root\":\"/photos\"}\n");
         let error = read_existing(&file.0).unwrap_err().to_string();
-        assert!(error.contains("バージョン"), "{error}");
+        assert!(error.contains("version mismatch"), "{error}");
     }
 
     #[test]

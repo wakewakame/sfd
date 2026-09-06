@@ -36,11 +36,11 @@ pub fn parse(mut bytes: Vec<u8>) -> Result<Image, ParseError> {
         Some(b"P7") => parse_pam_header(&bytes)?,
         Some(b"P6") => parse_plain_header(&bytes, 3)?,
         Some(b"P5") => parse_plain_header(&bytes, 1)?,
-        _ => return err("Netpbm 形式ではありません"),
+        _ => return err("not a Netpbm image"),
     };
 
     if header.maxval != 255 {
-        return err(format!("8 ビット画像ではありません (MAXVAL={})", header.maxval));
+        return err(format!("not an 8-bit image (MAXVAL={})", header.maxval));
     }
 
     let Some(expected) = header
@@ -48,13 +48,13 @@ pub fn parse(mut bytes: Vec<u8>) -> Result<Image, ParseError> {
         .checked_mul(header.height)
         .and_then(|n| n.checked_mul(header.channels))
     else {
-        return err("画像の寸法が大きすぎます");
+        return err("image dimensions are too large");
     };
 
     let available = bytes.len() - header.len;
     if available < expected {
         return err(format!(
-            "画素データが足りません ({available} バイト、{expected} バイト必要)"
+            "not enough pixel data ({available} bytes, {expected} needed)"
         ));
     }
 
@@ -85,11 +85,11 @@ fn parse_pam_header(bytes: &[u8]) -> Result<Header, ParseError> {
     let mut cursor = 0;
     loop {
         let Some(newline) = bytes[cursor..].iter().position(|&b| b == b'\n') else {
-            return err("PAM ヘッダが ENDHDR で終わっていません");
+            return err("PAM header is not terminated by ENDHDR");
         };
         let line_end = cursor + newline;
         let Ok(line) = std::str::from_utf8(&bytes[cursor..line_end]) else {
-            return err("PAM ヘッダが UTF-8 ではありません");
+            return err("PAM header is not valid UTF-8");
         };
         cursor = line_end + 1;
 
@@ -115,7 +115,7 @@ fn parse_pam_header(bytes: &[u8]) -> Result<Header, ParseError> {
     let (Some(width), Some(height), Some(channels), Some(maxval)) =
         (width, height, channels, maxval)
     else {
-        return err("PAM ヘッダに WIDTH / HEIGHT / DEPTH / MAXVAL が揃っていません");
+        return err("PAM header is missing WIDTH, HEIGHT, DEPTH or MAXVAL");
     };
 
     Ok(Header { len: cursor, width, height, channels, maxval })
@@ -130,7 +130,7 @@ fn parse_plain_header(bytes: &[u8], channels: usize) -> Result<Header, ParseErro
     for slot in numbers.iter_mut() {
         loop {
             let Some(&b) = bytes.get(cursor) else {
-                return err("Netpbm ヘッダが途中で終わっています");
+                return err("Netpbm header ends unexpectedly");
             };
             if b == b'#' {
                 while bytes.get(cursor).is_some_and(|&b| b != b'\n') {
@@ -150,12 +150,12 @@ fn parse_plain_header(bytes: &[u8], channels: usize) -> Result<Header, ParseErro
         let parsed = std::str::from_utf8(&bytes[start..cursor]).ok().and_then(|s| s.parse().ok());
         match parsed {
             Some(value) => *slot = value,
-            None => return err("Netpbm ヘッダの数値を読めません"),
+            None => return err("cannot parse a number in the Netpbm header"),
         }
     }
 
     if cursor >= bytes.len() {
-        return err("Netpbm ヘッダが途中で終わっています");
+        return err("Netpbm header ends unexpectedly");
     }
     cursor += 1; // maxval の直後の空白 1 文字
 

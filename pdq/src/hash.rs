@@ -94,7 +94,7 @@ pub struct ParseHashError;
 
 impl fmt::Display for ParseHashError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("PDQ ハッシュは 64 桁の 16 進文字列である必要があります")
+        f.write_str("a PDQ hash must be 64 hexadecimal digits")
     }
 }
 

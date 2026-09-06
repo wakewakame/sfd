@@ -15,30 +15,33 @@ use std::process::Command;
 use pdq::{DihedralHashes, Hash256, Hasher, Image};
 
 const USAGE: &str = "\
-使い方: phashsum [オプション] ファイル...
+Usage: phashsum [OPTION]... FILE...
 
-PDQ 知覚ハッシュを計算して出力する。デコードには ffmpeg を用いる。
+Print the PDQ perceptual hash of each file. Decoding is done by ffmpeg.
 
-ファイルに - を指定すると、デコード済みの Netpbm (P5/P6/P7) を標準入力から読む。
+Use - as the file name to read an already decoded Netpbm (P5/P6/P7) from stdin.
 
-オプション:
-  -d, --dihedral       回転・反転版を含む 8 通りのハッシュを出力する
-  -q, --quality        品質指標 (0..=100) も出力する
-  -j, --json           1 行 1 JSON で出力する (エラーも同じ行形式で残る)
+Options:
+  -d, --dihedral       print all 8 hashes, including rotations and flips
+  -q, --quality        also print the quality metric (0..=100)
+  -j, --json           print one JSON object per line (errors included)
       --full-resolution
-                       512x512 への前処理を行わず、元の解像度のままハッシュする。
-                       既定ではリファレンス CLI と同じ前処理をかけており、
-                       これを外すと値が公式の期待値と食い違ううえ、非常に遅くなる
-      --ss TIME        動画のこの位置のフレームを使う (例: 00:00:10, 12.5)
-      --ffmpeg PATH    ffmpeg の実行ファイルを指定する (環境変数 PHASHSUM_FFMPEG でも可)
-  -h, --help           この使い方を表示する
+                       hash at the original resolution instead of downsampling
+                       to 512x512 first. The default matches the reference CLI;
+                       turning it off makes the values disagree with the
+                       published expectations and is far slower
+      --ss TIME        use the frame at this position of a video (e.g. 00:00:10)
+      --ffmpeg PATH    ffmpeg executable to use (or set PHASHSUM_FFMPEG)
+  -h, --help           show this help
 
-出力形式 (既定):
-  <64 桁の 16 進>  <パス>
+Output format (default):
+  <64 hex digits>  <path>
 
-エラーが起きても処理は止めず、次のファイルに進む。1 件でも失敗していれば
-終了コードは 1 になる。--json のときはエラーも \"error\" を持つ行として残る。
+Errors do not stop the run; processing continues with the next file. The exit
+status is 1 if any file failed. With --json, errors are kept as lines carrying
+an \"error\" field.
 ";
+
 
 struct Options {
     dihedral: bool,
@@ -79,7 +82,7 @@ fn main() {
     }
 
     if let Err(e) = out.flush() {
-        eprintln!("phashsum: 標準出力への書き込みに失敗しました: {e}");
+        eprintln!("phashsum: cannot write to stdout: {e}");
         saw_error = true;
     }
 
@@ -130,7 +133,7 @@ fn read_netpbm_from_stdin() -> Result<Image, String> {
     io::stdin()
         .lock()
         .read_to_end(&mut bytes)
-        .map_err(|e| format!("標準入力を読めませんでした: {e}"))?;
+        .map_err(|e| format!("cannot read stdin: {e}"))?;
     pdq::netpbm::parse(bytes).map_err(|e| e.to_string())
 }
 
@@ -162,18 +165,43 @@ fn decode_with_ffmpeg(path: &Path, opts: &Options) -> Result<Image, String> {
 
     let output = command
         .output()
-        .map_err(|e| format!("ffmpeg ({}) を起動できませんでした: {e}", opts.ffmpeg))?;
+        .map_err(|e| format!("cannot run ffmpeg ({}): {e}", opts.ffmpeg))?;
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let detail = stderr.lines().last().unwrap_or("詳細不明").trim();
-        return Err(format!("ffmpeg が失敗しました: {detail}"));
+        return Err(format!("ffmpeg failed: {}", error_message(&output.stderr)));
     }
     if output.stdout.is_empty() {
-        return Err("ffmpeg がフレームを出力しませんでした".to_string());
+        return Err("ffmpeg produced no frame".to_string());
     }
 
     pdq::netpbm::parse(output.stdout).map_err(|e| e.to_string())
+}
+
+/// ffmpeg の stderr から、表示に使う 1 行を取り出す。
+///
+/// 先頭の行を取るのは、そこに根本原因が出るため。後ろの行は「結局何も出力
+/// されなかった」といった結果の報告になりがちで、原因が分からない。
+/// `[mjpeg @ 0x7f...]` のような接頭辞は実行のたびに変わるポインタを含むので落とす。
+///
+/// sfd 側の media.rs にも同じ処理がある。pdq は依存クレートを持たない方針で
+/// sfd と共有できないため、意図して重複させている。
+fn error_message(stderr: &[u8]) -> String {
+    String::from_utf8_lossy(stderr)
+        .lines()
+        .map(strip_context_prefixes)
+        .find(|line| !line.is_empty())
+        .unwrap_or_else(|| "no details".to_string())
+}
+
+fn strip_context_prefixes(line: &str) -> String {
+    let mut rest = line.trim();
+    while let Some(stripped) = rest.strip_prefix('[') {
+        match stripped.split_once(']') {
+            Some((_, after)) => rest = after.trim_start(),
+            None => break,
+        }
+    }
+    rest.to_string()
 }
 
 // ================================================================
@@ -296,7 +324,7 @@ fn parse_args() -> Result<Option<Options>, String> {
         let mut take_value = |name: &str| -> Result<String, String> {
             args.next()
                 .map(|v| v.to_string_lossy().into_owned())
-                .ok_or_else(|| format!("{name} には値が必要です"))
+                .ok_or_else(|| format!("{name} requires a value"))
         };
 
         match text.as_str() {
@@ -311,12 +339,12 @@ fn parse_args() -> Result<Option<Options>, String> {
             "--full-resolution" => opts.full_resolution = true,
             "--ss" => opts.seek = Some(take_value("--ss")?),
             "--ffmpeg" => opts.ffmpeg = take_value("--ffmpeg")?,
-            other => return Err(format!("不明なオプションです: {other}")),
+            other => return Err(format!("unknown option: {other}")),
         }
     }
 
     if opts.paths.is_empty() {
-        return Err("ファイルが指定されていません".to_string());
+        return Err("no files given".to_string());
     }
 
     Ok(Some(opts))
