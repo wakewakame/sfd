@@ -34,6 +34,7 @@ Options for sfd find:
 
 Common options:
   -h, --help         show this help
+  -V, --version      show the version
 
 Errors do not stop the run; they are kept in hash.json as lines carrying an
 \"error\" field. Progress is written to stderr.
@@ -55,6 +56,12 @@ fn run() -> Result<ExitCode, String> {
     let subcommand = match args.next() {
         Some(arg) if arg == "-h" || arg == "--help" => {
             print!("{USAGE}");
+            return Ok(ExitCode::SUCCESS);
+        }
+        // 不具合報告を受けたときにどのビルドか特定できるよう、版を出せるようにする。
+        // リリース時にタグと Cargo.toml が一致することを CI で確かめている。
+        Some(arg) if arg == "-V" || arg == "--version" => {
+            println!("sfd {}", env!("CARGO_PKG_VERSION"));
             return Ok(ExitCode::SUCCESS);
         }
         Some(arg) => arg,

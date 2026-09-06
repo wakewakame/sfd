@@ -33,6 +33,7 @@ Options:
       --ss TIME        use the frame at this position of a video (e.g. 00:00:10)
       --ffmpeg PATH    ffmpeg executable to use (or set PHASHSUM_FFMPEG)
   -h, --help           show this help
+  -V, --version        show the version
 
 Output format (default):
   <64 hex digits>  <path>
@@ -329,6 +330,10 @@ fn parse_args() -> Result<Option<Options>, String> {
             "--" => no_more_flags = true,
             "-h" | "--help" => {
                 print!("{USAGE}");
+                return Ok(None);
+            }
+            "-V" | "--version" => {
+                println!("phashsum {}", env!("CARGO_PKG_VERSION"));
                 return Ok(None);
             }
             "-d" | "--dihedral" => opts.dihedral = true,

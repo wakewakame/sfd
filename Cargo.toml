@@ -5,6 +5,8 @@ members = ["pdq", "sfd"]
 resolver = "3"
 
 [workspace.package]
+# タグと一致させること。リリース時に CI が突き合わせて、食い違えば落ちる。
+# --version が嘘をついたまま配布されるのを防ぐため。
 version = "0.1.0"
 edition = "2024"
 license = "BSD-3-Clause"

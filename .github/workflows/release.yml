@@ -22,6 +22,18 @@ jobs:
       # (コメントのバージョンは参照用)。更新するときはハッシュとコメントを両方書き換えること。
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # --version が嘘をついたまま配布されないよう、タグと突き合わせる。
+      # 手で両方を更新する運用だといつか忘れるので、忘れたらここで落ちるようにする。
+      - name: タグと Cargo.toml のバージョンが一致するか確認
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "sfd") | .version')
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "tag $GITHUB_REF_NAME does not match Cargo.toml version $version" >&2
+            exit 1
+          fi
+
       - run: cargo clippy --release --all-targets -- -D warnings
       - run: cargo test --release
 
