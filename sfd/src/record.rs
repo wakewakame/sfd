@@ -5,7 +5,7 @@
 
 use std::collections::HashSet;
 use std::fs::File;
-use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
+use std::io::{self, BufRead, BufReader, Write};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -69,6 +69,7 @@ pub struct Frame {
 // 読み込み
 
 /// 既存の hash.json から読み取った内容。
+#[derive(Debug)]
 pub struct Existing {
     pub header: Header,
     /// 既に記録済みのパス。再開時にこれを読み飛ばす。
@@ -77,19 +78,13 @@ pub struct Existing {
     pub truncated_tail: bool,
 }
 
+/// hash.json として読めなかった。
 #[derive(Debug)]
-pub enum ReadError {
-    Io(io::Error),
-    /// ファイルはあるが hash.json として読めない。
-    Malformed(String),
-}
+pub struct ReadError(String);
 
 impl std::fmt::Display for ReadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ReadError::Io(e) => write!(f, "{e}"),
-            ReadError::Malformed(message) => f.write_str(message),
-        }
+        f.write_str(&self.0)
     }
 }
 
@@ -97,7 +92,7 @@ impl std::error::Error for ReadError {}
 
 impl From<io::Error> for ReadError {
     fn from(e: io::Error) -> Self {
-        ReadError::Io(e)
+        ReadError(e.to_string())
     }
 }
 
@@ -105,6 +100,8 @@ impl From<io::Error> for ReadError {
 ///
 /// 強制終了で末尾行が途中まで書かれている場合は、その行を切り捨ててから返す。
 /// 途中で切れていられるのは末尾行だけなので、それ以外の壊れた行は破損として扱う。
+///
+/// 数百万行になりうるので、行を溜めずに読み進めてパスだけを残す。
 pub fn read_existing(path: &Path) -> Result<Option<Existing>, ReadError> {
     let file = match File::open(path) {
         Ok(file) => file,
@@ -112,62 +109,59 @@ pub fn read_existing(path: &Path) -> Result<Option<Existing>, ReadError> {
         Err(e) => return Err(e.into()),
     };
 
-    let lines: Vec<Vec<u8>> = BufReader::new(file).split(b'\n').collect::<io::Result<_>>()?;
-    if lines.is_empty() {
-        return Err(ReadError::Malformed("空のファイルです".into()));
-    }
-
-    let header: Header = serde_json::from_slice(&lines[0])
-        .map_err(|e| ReadError::Malformed(format!("1 行目をヘッダとして読めません: {e}")))?;
-    if header.v != FORMAT_VERSION {
-        return Err(ReadError::Malformed(format!(
-            "形式のバージョンが違います (このファイル: {}, このコマンド: {FORMAT_VERSION})",
-            header.v
-        )));
-    }
-
-    let complete = ends_with_newline(path)?;
+    let mut reader = BufReader::new(file);
+    let mut header = None;
     let mut done = HashSet::new();
     let mut truncated_tail = false;
-    let mut valid_bytes = lines[0].len() + 1;
+    let mut valid_bytes = 0u64;
+    let mut line = Vec::new();
 
-    for (index, line) in lines.iter().enumerate().skip(1) {
-        match serde_json::from_slice::<Record>(line) {
-            Ok(record) => {
-                done.insert(record.path);
-                valid_bytes += line.len() + 1;
+    for line_number in 1.. {
+        line.clear();
+        if reader.read_until(b'\n', &mut line)? == 0 {
+            break;
+        }
+        // 改行で終わっていない行は、ファイルの末尾かつ書きかけということ。
+        let complete = line.ends_with(b"\n");
+        let content = line.strip_suffix(b"\n").unwrap_or(&line);
+
+        if line_number == 1 {
+            let parsed: Header = serde_json::from_slice(content)
+                .map_err(|e| ReadError(format!("1 行目をヘッダとして読めません: {e}")))?;
+            if parsed.v != FORMAT_VERSION {
+                return Err(ReadError(format!(
+                    "形式のバージョンが違います (このファイル: {}, このコマンド: {FORMAT_VERSION})",
+                    parsed.v
+                )));
             }
-            Err(e) => {
-                // 末尾が改行で終わっていなければ、書き込み途中で落ちたとみなす。
-                if index == lines.len() - 1 && !complete {
+            header = Some(parsed);
+        } else {
+            match serde_json::from_slice::<Record>(content) {
+                Ok(record) => {
+                    done.insert(record.path);
+                }
+                Err(_) if !complete => {
                     truncated_tail = true;
                     break;
                 }
-                return Err(ReadError::Malformed(format!("{} 行目を読めません: {e}", index + 1)));
+                Err(e) => {
+                    return Err(ReadError(format!("{line_number} 行目を読めません: {e}")));
+                }
             }
         }
+        valid_bytes += line.len() as u64;
     }
+
+    let Some(header) = header else {
+        return Err(ReadError("空のファイルです".into()));
+    };
 
     if truncated_tail {
         // 壊れた末尾行を落としておかないと、追記した内容まで読めなくなる。
-        File::options().write(true).open(path)?.set_len(valid_bytes as u64)?;
+        File::options().write(true).open(path)?.set_len(valid_bytes)?;
     }
 
     Ok(Some(Existing { header, done, truncated_tail }))
-}
-
-/// ファイルが改行で終わっているか。`split` は末尾の改行の有無を区別しないので、
-/// 最後の行が完結しているかどうかは元のバイト列を見るしかない。
-fn ends_with_newline(path: &Path) -> io::Result<bool> {
-    let mut file = File::open(path)?;
-    let len = file.metadata()?.len();
-    if len == 0 {
-        return Ok(true);
-    }
-    file.seek(SeekFrom::End(-1))?;
-    let mut last = [0u8; 1];
-    file.read_exact(&mut last)?;
-    Ok(last[0] == b'\n')
 }
 
 // ================================================================
@@ -319,6 +313,110 @@ mod tests {
             let back: Record = serde_json::from_str(&line).unwrap();
             assert_eq!(back.pdq.unwrap().len(), record.pdq.as_ref().unwrap().len());
         }
+    }
+
+    // ------------------------------------------------------------
+    // 再開処理
+
+    /// テスト用の一時ファイル。中身を書いてパスを渡し、落ちたら消す。
+    struct TempFile(std::path::PathBuf);
+
+    impl TempFile {
+        fn with(contents: &[u8]) -> Self {
+            static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+            let id = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let path =
+                std::env::temp_dir().join(format!("sfd-{}-{id}.jsonl", std::process::id()));
+            std::fs::write(&path, contents).unwrap();
+            TempFile(path)
+        }
+
+        fn contents(&self) -> Vec<u8> {
+            std::fs::read(&self.0).unwrap()
+        }
+    }
+
+    impl Drop for TempFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    const HEADER: &str = r#"{"v":1,"root":"/photos"}"#;
+    const ROW_A: &str = r#"{"path":"a.jpg","bytes":1,"mtime":"1970-01-01T00:00:00Z"}"#;
+    const ROW_B: &str = r#"{"path":"b.jpg","bytes":2,"mtime":"1970-01-01T00:00:00Z"}"#;
+
+    #[test]
+    fn missing_file_is_not_an_error() {
+        let path = std::env::temp_dir().join("sfd-does-not-exist.jsonl");
+        assert!(read_existing(&path).unwrap().is_none());
+    }
+
+    #[test]
+    fn collects_recorded_paths() {
+        let file = TempFile::with(format!("{HEADER}\n{ROW_A}\n{ROW_B}\n").as_bytes());
+        let existing = read_existing(&file.0).unwrap().unwrap();
+        assert_eq!(existing.header.root, "/photos");
+        assert_eq!(existing.done.len(), 2);
+        assert!(existing.done.contains("a.jpg") && existing.done.contains("b.jpg"));
+        assert!(!existing.truncated_tail);
+    }
+
+    /// ヘッダだけの状態から再開できる (1 件も処理せずに中断した場合)。
+    #[test]
+    fn header_only_file_is_valid() {
+        let file = TempFile::with(format!("{HEADER}\n").as_bytes());
+        let existing = read_existing(&file.0).unwrap().unwrap();
+        assert!(existing.done.is_empty());
+    }
+
+    /// 強制終了で書きかけだった末尾行は切り捨てて、追記できる状態に戻す。
+    #[test]
+    fn truncated_tail_is_dropped_from_the_file() {
+        let intact = format!("{HEADER}\n{ROW_A}\n");
+        let file = TempFile::with(format!("{intact}{{\"path\":\"b.jpg\",\"byt").as_bytes());
+
+        let existing = read_existing(&file.0).unwrap().unwrap();
+        assert!(existing.truncated_tail);
+        assert_eq!(existing.done, ["a.jpg".to_string()].into_iter().collect());
+        // 壊れた行が残っていると、次に読むときに破損として弾かれてしまう。
+        assert_eq!(file.contents(), intact.as_bytes());
+    }
+
+    /// 末尾が改行で終わっていれば、壊れた行は書きかけではなく破損。
+    #[test]
+    fn corrupt_line_is_rejected() {
+        let file = TempFile::with(format!("{HEADER}\nこわれた\n{ROW_A}\n").as_bytes());
+        let error = read_existing(&file.0).unwrap_err().to_string();
+        assert!(error.contains("2 行目"), "{error}");
+    }
+
+    #[test]
+    fn version_mismatch_is_rejected() {
+        let file = TempFile::with(b"{\"v\":999,\"root\":\"/photos\"}\n");
+        let error = read_existing(&file.0).unwrap_err().to_string();
+        assert!(error.contains("バージョン"), "{error}");
+    }
+
+    #[test]
+    fn empty_file_is_rejected() {
+        let file = TempFile::with(b"");
+        assert!(read_existing(&file.0).is_err());
+    }
+
+    /// 書いたものをそのまま読み戻せる。
+    #[test]
+    fn written_records_can_be_read_back() {
+        let file = TempFile::with(b"");
+        let mut writer = Writer::create(&file.0, "/photos").unwrap();
+        writer.write(&sample(None, vec![Frame { t: 0.0, hash: "ab".repeat(32), quality: 90 }]))
+            .unwrap();
+        writer.flush().unwrap();
+        drop(writer);
+
+        let existing = read_existing(&file.0).unwrap().unwrap();
+        assert_eq!(existing.header.root, "/photos");
+        assert_eq!(existing.done, ["a/b".to_string()].into_iter().collect());
     }
 
     #[test]

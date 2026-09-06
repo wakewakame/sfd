@@ -52,10 +52,9 @@ pub fn run(options: HashOptions) -> Result<ExitCode, String> {
         if interactive && count % 1000 == 0 {
             eprint!("\r探索中... {count} 件");
         }
-    })
-    .map_err(|e| format!("{} を探索できません: {e}", options.root.display()))?;
+    });
     if interactive {
-        eprint!("\r{}\r", " ".repeat(30));
+        clear_line();
     }
     eprintln!("探索完了: {} 件", walked.files.len());
 
@@ -176,8 +175,7 @@ fn hash_all(
     });
 
     if interactive {
-        // 進捗行を消してから次の出力に移る。
-        eprint!("\r{}\r", " ".repeat(78));
+        clear_line();
     }
 
     if let Some(e) = write_error {
@@ -186,6 +184,14 @@ fn hash_all(
 
     summary.elapsed = started.elapsed();
     Ok(summary)
+}
+
+/// 進捗表示に使う桁数。行を消すときもこの幅で揃える。
+const PROGRESS_WIDTH: usize = 78;
+
+/// 書きかけの進捗行を消して行頭に戻る。
+fn clear_line() {
+    eprint!("\r{}\r", " ".repeat(PROGRESS_WIDTH));
 }
 
 fn progress(done: usize, total: usize, elapsed: Duration, current: &str) {

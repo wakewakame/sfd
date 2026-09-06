@@ -56,11 +56,14 @@ pub struct Walked {
 
 /// `root` 以下を再帰的に探索して、対象ファイルを集める。
 ///
+/// 読めなかったものは [`Walked::unreadable`] に集めて探索は続ける。1 つ読めない
+/// ディレクトリがあるだけで全体が止まっては困るので、この関数自体は失敗しない。
+///
 /// ディレクトリへのシンボリックリンクは辿らない。辿ると循環しうるし、
 /// 同じファイルを二重に数えることにもなるため。
 ///
 /// `on_progress` は見つかった件数が増えるたびに呼ばれる。
-pub fn walk(root: &Path, mut on_progress: impl FnMut(usize)) -> io::Result<Walked> {
+pub fn walk(root: &Path, mut on_progress: impl FnMut(usize)) -> Walked {
     let mut walked = Walked { files: Vec::new(), unreadable: Vec::new() };
     let mut stack = vec![root.to_path_buf()];
 
@@ -125,7 +128,7 @@ pub fn walk(root: &Path, mut on_progress: impl FnMut(usize)) -> io::Result<Walke
 
     // スタックで掘っているので順序が入り組む。決定的にするため最後に揃える。
     walked.files.sort_by(|a, b| a.relative.cmp(&b.relative));
-    Ok(walked)
+    walked
 }
 
 /// `root` からの相対パスを `/` 区切りの文字列にする。
