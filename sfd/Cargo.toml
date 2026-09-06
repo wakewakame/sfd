@@ -1,0 +1,12 @@
+[package]
+name = "sfd"
+description = "Similar File Detector"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+pdq = { path = "../pdq" }
+sha2 = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

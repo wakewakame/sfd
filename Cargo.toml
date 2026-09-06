@@ -1,0 +1,13 @@
+[workspace]
+members = ["pdq", "sfd"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "BSD-3-Clause"
+
+# profile はワークスペースルートのものだけが使われるので、ここに置く。
+[profile.release]
+opt-level = 3
+lto = true

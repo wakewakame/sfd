@@ -17,17 +17,20 @@ hash.json は 1 行 1 JSON (JSONL) で、1 行目をヘッダとする。
 ```sh
 $ cat hash.json
 {"v":1,"root":"./dir"}
-{"path":"1.jpg","bytes":100,"mtime":"2026-09-02T01:23:45Z","sha256":"xxx","width":4032,"height":3024,"pdq":"xxx","quality":100}
-{"path":"2.png","bytes":200,"mtime":"2026-08-31T12:00:00Z","sha256":"xxx","width":1024,"height":768,"pdq":"xxx","quality":95}
+{"path":"1.jpg","bytes":100,"mtime":"2026-09-02T01:23:45Z","sha256":"xxx","width":4032,"height":3024,"pdq":[{"t":0.0,"hash":"xxx","quality":100}]}
+{"path":"2.png","bytes":200,"mtime":"2026-08-31T12:00:00Z","sha256":"xxx","width":1024,"height":768,"pdq":[{"t":0.0,"hash":"xxx","quality":95}]}
 {"path":"3.mp4","bytes":300,"mtime":"2026-07-01T09:30:00Z","sha256":"xxx","width":1920,"height":1080,"duration":123.4,"pdq":[{"t":30.8,"hash":"xxx","quality":100},{"t":61.7,"hash":"xxx","quality":98},{"t":92.5,"hash":"xxx","quality":97}]}
 {"path":"4.jpg","bytes":50,"mtime":"2026-06-15T18:00:00Z","sha256":"xxx","error":"ffmpeg が失敗しました: ..."}
 ```
 
 - `path` はヘッダの `root` からの相対パス。ディレクトリごと移動しても hash.json が使える
+- **画像も「1 フレームの動画」として同じ形で持つ**。画像と動画で形が変わらないので、
+  比較する側は常に「ハッシュの集合どうしの比較」として書ける。画像の `t` は 0
+- `duration` を持つかどうかが画像と動画の区別になる
+- `pdq` はどのフレームかを位置ではなく `t` (秒) で持つ。
+  将来サンプリング方法を変えても、古い hash.json が静かに誤解釈されない
 - `width` / `height` / `duration` / `quality` は、どのファイルを残すか決めるときの判断材料になる。
   計算時にはすでに手元にある値なので記録コストはゼロだが、後から足すと全ファイルの再スキャンになる
-- 動画の `pdq` は位置ではなく `t` (秒) でどのフレームかを持つ。
-  将来サンプリング方法を変えても、古い hash.json が静かに誤解釈されない
 - `error` を持つ行は処理に失敗したもの。中断せず記録して次に進む
 
 ## sfd find

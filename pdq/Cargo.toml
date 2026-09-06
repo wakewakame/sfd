@@ -1,11 +1,11 @@
 [package]
 name = "pdq"
-version = "0.1.0"
-edition = "2021"
 description = "PDQ perceptual hash (pure Rust port of the reference C++ implementation)"
+version.workspace = true
+edition.workspace = true
 # facebook/ThreatExchange (Copyright (c) Meta Platforms, Inc. and affiliates) の
 # BSD 3-Clause なコードからの派生物。詳細と上流の表示は LICENSE を参照。
-license = "BSD-3-Clause"
+license.workspace = true
 
 # 依存なし。画像・動画のデコードは phashsum が ffmpeg を子プロセスとして呼ぶ。
 [dependencies]
@@ -13,7 +13,3 @@ license = "BSD-3-Clause"
 [[bin]]
 name = "phashsum"
 path = "src/bin/phashsum.rs"
-
-[profile.release]
-opt-level = 3
-lto = true
