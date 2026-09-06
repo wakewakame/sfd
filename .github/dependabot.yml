@@ -1,0 +1,25 @@
+version: 2
+updates:
+  # release.yml では各 action をコミットハッシュで固定しているので、
+  # 更新はここからの PR で行う。
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      all:
+        patterns:
+          - '*'
+  # 実際に使われる版は Cargo.lock で固定されているので、更新もそこに入る。
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      all:
+        patterns:
+          - '*'
