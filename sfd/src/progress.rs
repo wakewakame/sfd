@@ -127,6 +127,15 @@ mod tests {
         assert_eq!(tail("あいうえおかきくけこ", 5), "...けこ");
     }
 
+    /// 1 件のときだけ s を付けない。1 errors と出ていたのを直したところ。
+    #[test]
+    fn pluralises_only_beyond_one() {
+        assert_eq!(plural(0, "file"), "0 files");
+        assert_eq!(plural(1, "file"), "1 file");
+        assert_eq!(plural(2, "file"), "2 files");
+        assert_eq!(plural(1, "group"), "1 group");
+    }
+
     #[test]
     fn formats_remaining_time_by_magnitude() {
         assert_eq!(format_duration(0.4), "0s");

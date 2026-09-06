@@ -60,7 +60,7 @@ pub fn run(options: HashOptions) -> Result<ExitCode, String> {
 
     let skipped = found_count - todo.len();
     if skipped > 0 {
-        eprintln!("Skipping {skipped} already recorded");
+        eprintln!("Skipping {} already recorded", progress::plural(skipped, "file"));
     }
     if todo.is_empty() && walked.unreadable.is_empty() {
         eprintln!("Nothing to do");

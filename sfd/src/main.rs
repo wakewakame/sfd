@@ -106,7 +106,7 @@ fn parse_hash_args(mut args: impl Iterator<Item = String>) -> Result<HashOptions
                         .parse::<usize>()
                         .ok()
                         .filter(|n| *n > 0)
-                        .ok_or_else(|| format!("--jobs takes an integer of 1 or more: {value}"))?,
+                        .ok_or_else(|| format!("--jobs takes a positive integer: {value}"))?,
                 );
             }
             "--no-resume" => resume = false,

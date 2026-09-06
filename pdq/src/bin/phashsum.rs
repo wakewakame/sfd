@@ -27,9 +27,9 @@ Options:
   -j, --json           print one JSON object per line (errors included)
       --full-resolution
                        hash at the original resolution instead of downsampling
-                       to 512x512 first. The default matches the reference CLI;
-                       turning it off makes the values disagree with the
-                       published expectations and is far slower
+                       to 512x512 first. The default matches the reference CLI,
+                       so passing this makes the hashes disagree with the
+                       published expectations, and it is far slower
       --ss TIME        use the frame at this position of a video (e.g. 00:00:10)
       --ffmpeg PATH    ffmpeg executable to use (or set PHASHSUM_FFMPEG)
   -h, --help           show this help
@@ -348,4 +348,33 @@ fn parse_args() -> Result<Option<Options>, String> {
     }
 
     Ok(Some(opts))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// sfd 側の media.rs に同じ処理があり、そちらにも同じテストがある。
+    /// 片方だけ直して食い違うことが実際に起きたので、両方で固定しておく。
+    #[test]
+    fn picks_the_first_meaningful_stderr_line() {
+        assert_eq!(error_message(b"a\nb\n"), "a");
+        assert_eq!(error_message(b"\n\nb\n"), "b");
+        assert_eq!(error_message(b""), "no details");
+    }
+
+    /// 実行のたびに変わるポインタを含む接頭辞は落とす。
+    #[test]
+    fn strips_context_prefixes() {
+        assert_eq!(
+            error_message(b"[mjpeg @ 0xa1ec4c380] No JPEG data found in image\n"),
+            "No JPEG data found in image"
+        );
+        assert_eq!(
+            error_message(b"[vist#0:0/mjpeg @ 0x1] [dec:mjpeg @ 0x2] Error submitting packet\n"),
+            "Error submitting packet"
+        );
+        // 閉じ括弧がなければ、無理に削らずそのまま残す。
+        assert_eq!(error_message(b"[unterminated\n"), "[unterminated");
+    }
 }

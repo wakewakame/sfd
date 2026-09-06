@@ -118,7 +118,7 @@ pub fn walk(root: &Path, mut on_progress: impl FnMut(usize)) -> Walked {
             let metadata = match std::fs::symlink_metadata(&path) {
                 Ok(metadata) => metadata,
                 Err(e) => {
-                    walked.push_unreadable(root, &path, format_args!("cannot stat: {e}"));
+                    walked.push_unreadable(root, &path, format_args!("cannot read its metadata: {e}"));
                     continue;
                 }
             };
