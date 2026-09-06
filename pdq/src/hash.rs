@@ -60,7 +60,7 @@ impl Hash256 {
             return Err(ParseHashError);
         }
         let mut w = [0u16; 16];
-        for (i, chunk) in s.as_bytes().chunks_exact(4).enumerate() {
+        for (i, chunk) in s.as_bytes().as_chunks::<4>().0.iter().enumerate() {
             let text = std::str::from_utf8(chunk).map_err(|_| ParseHashError)?;
             // 16 進表記は w[15] から並ぶので、書き戻す添字は逆順。
             w[15 - i] = u16::from_str_radix(text, 16).map_err(|_| ParseHashError)?;

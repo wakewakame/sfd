@@ -241,7 +241,7 @@ impl Hasher {
             // 画像には fillFloatLumaFromGrey という別経路を使っており、
             // RGB に展開してから変換すると係数の丸めのぶんだけ値がずれる。
             1 => self.luma.extend(image.data.iter().map(|&v| v as f32)),
-            3 => self.luma.extend(image.data.chunks_exact(3).map(|p| {
+            3 => self.luma.extend(image.data.as_chunks::<3>().0.iter().map(|p| {
                 LUMA_FROM_R * p[0] as f32 + LUMA_FROM_G * p[1] as f32 + LUMA_FROM_B * p[2] as f32
             })),
             other => return Err(UnsupportedChannels(other)),
@@ -374,7 +374,7 @@ mod tests {
 
     fn rgb(width: usize, height: usize) -> Image {
         let mut data = vec![0u8; width * height * 3];
-        for (i, p) in data.chunks_exact_mut(3).enumerate() {
+        for (i, p) in data.as_chunks_mut::<3>().0.iter_mut().enumerate() {
             p[0] = (i % 251) as u8;
             p[1] = (i % 241) as u8;
             p[2] = (i % 239) as u8;
